@@ -128,6 +128,21 @@
   .tab-btn:hover{border-color:var(--accent);color:var(--accent);}
   .tab-btn.active{background:var(--accent);border-color:var(--accent);color:#ffffff;}
 
+  .history-search{
+    display:flex;align-items:center;gap:10px;
+    background:var(--field-bg);
+    border-radius:999px;
+    padding:12px 18px;
+    margin-bottom:20px;
+  }
+  .history-search svg{width:20px;height:20px;color:var(--ink-soft);flex-shrink:0;}
+  .history-search input{
+    border:none;background:none;outline:none;
+    font-family:'Public Sans',sans-serif;font-size:15px;font-weight:500;
+    color:var(--ink);width:100%;
+  }
+  .history-search input::placeholder{color:var(--ink-soft);}
+
   .history-entry{border:1px solid var(--line);border-radius:16px;margin-bottom:14px;overflow:hidden;}
   .history-entry:last-child{margin-bottom:0;}
   .history-entry summary{
@@ -137,6 +152,8 @@
   .history-entry summary::-webkit-details-marker{display:none;}
   .history-entry .h-main{font-family:'Oswald',sans-serif;font-weight:600;text-transform:uppercase;letter-spacing:.02em;font-size:14.5px;}
   .history-entry .h-meta{font-family:'IBM Plex Mono',monospace;font-size:12px;color:var(--ink-soft);}
+  .history-entry .h-actions{display:flex;gap:4px;margin-left:auto;}
+  .history-entry .h-actions .icon-btn{font-size:17px;}
   .history-entry .h-body{padding:0 18px 16px;}
 
   .icon-btn{
@@ -185,6 +202,47 @@
   .save-status{font-size:12.5px;color:var(--ink-soft);font-family:'Public Sans',sans-serif;}
 
   .empty{color:var(--ink-soft);font-size:13.5px;font-style:italic;padding:8px 0;}
+
+  .magnifier-toggle{
+    position:fixed;right:24px;bottom:24px;z-index:9998;
+    width:56px;height:56px;border-radius:50%;
+    background:var(--accent);color:#ffffff;border:none;
+    display:flex;align-items:center;justify-content:center;
+    box-shadow:0 6px 18px rgba(0,0,0,.28);
+    cursor:pointer;
+  }
+  .magnifier-toggle svg{width:26px;height:26px;}
+  .magnifier-toggle.active{background:#155e27;}
+
+  .magnifier-lens{
+    display:none;
+    position:fixed;
+    width:200px;height:200px;
+    border-radius:50%;
+    border:7px solid var(--accent);
+    box-shadow:0 10px 30px rgba(0,0,0,.4), inset 0 0 0 3px rgba(255,255,255,.7);
+    overflow:hidden;
+    pointer-events:none;
+    z-index:9999;
+    background:#ffffff;
+  }
+  .magnifier-lens::after{
+    content:'';
+    position:absolute;
+    width:16px;height:70px;
+    background:var(--accent);
+    border-radius:8px;
+    right:-18px;bottom:-52px;
+    transform:rotate(45deg);
+    transform-origin:top center;
+    box-shadow:2px 0 6px rgba(0,0,0,.25);
+  }
+  .magnifier-inner{
+    position:absolute;top:0;left:0;
+    transform-origin:0 0;
+    pointer-events:none;
+  }
+  body.magnifier-active, body.magnifier-active *{cursor:none !important;}
 
   @media (max-width: 960px){
     #sim-result table, #sim-result thead, #sim-result tbody, #sim-result tr, #sim-result td { display:block; width:100%; }
@@ -324,11 +382,27 @@
     <div class="card">
       <h2>Histórico de simulações</h2>
       <p id="history-sync-status" style="font-size:13px;color:var(--ink-soft);margin:-8px 0 18px;"></p>
+      <div class="history-search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="21" y1="21" x2="16.2" y2="16.2"></line>
+        </svg>
+        <input type="text" id="history-search-input" placeholder="Buscar por código ou descrição do produto...">
+      </div>
       <div id="history-list"></div>
-      <button class="add-btn" id="clear-history-btn" style="margin-top:16px;">Limpar histórico</button>
     </div>
   </div>
 
+</div>
+
+<button class="magnifier-toggle" id="magnifier-toggle" type="button" title="Ativar lupa">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+    <circle cx="11" cy="11" r="7"></circle>
+    <line x1="21" y1="21" x2="16.2" y2="16.2"></line>
+  </svg>
+</button>
+<div class="magnifier-lens" id="magnifier-lens">
+  <div class="magnifier-inner" id="magnifier-inner"></div>
 </div>
 
 <script>
@@ -1143,13 +1217,74 @@ function formatDateTime(iso){
   return d.toLocaleString('pt-BR', { day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit' });
 }
 
+let editingEntryId = null;
+
 function renderHistory(){
   const container = document.getElementById('history-list');
+  const query = stripAccents((document.getElementById('history-search-input').value || '').trim().toLowerCase());
+  const filtered = query
+    ? state.history.filter(entry => {
+        const haystack = stripAccents(`${entry.productId} ${entry.productDesc || ''}`.toLowerCase());
+        return haystack.includes(query);
+      })
+    : state.history;
+
   if (!state.history.length){
     container.innerHTML = '<div class="empty">Nenhuma simulação salva ainda.</div>';
     return;
   }
-  container.innerHTML = state.history.map(entry => {
+  if (!filtered.length){
+    container.innerHTML = '<div class="empty">Nenhuma simulação encontrada para essa busca.</div>';
+    return;
+  }
+  container.innerHTML = filtered.map(entry => {
+    const isEditing = editingEntryId === entry.id;
+
+    if (isEditing){
+      const rowsHtml = entry.rows.map((r, idx) => `
+        <tr data-edit-row="${idx}">
+          <td class="desc-cell">${r.nome}</td>
+          <td><input class="num-input" data-edit-field="frete" value="${r.frete.toFixed(2).replace('.', ',')}"></td>
+          <td><input class="num-input" data-edit-field="retencao" value="${r.retencao.toFixed(2).replace('.', ',')}"></td>
+          <td><input class="num-input" data-edit-field="retOpCreditoR" value="${r.retOpCreditoR.toFixed(2).replace('.', ',')}"></td>
+          <td data-edit-out="recLiquido"></td>
+          <td><input class="num-input" data-edit-field="custo" value="${r.custo.toFixed(2).replace('.', ',')}"></td>
+          <td data-edit-out="resultadoLiqVenda"></td>
+          <td><input class="num-input" data-edit-field="despOpR" value="${r.despOpR.toFixed(2).replace('.', ',')}"></td>
+          <td data-edit-out="sobra"></td>
+          <td data-edit-out="resultadoPct"></td>
+        </tr>`).join('');
+      return `
+        <details class="history-entry" open>
+          <summary>
+            <span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span>
+            <span class="h-meta">Editando…</span>
+          </summary>
+          <div class="h-body">
+            <div class="field-row" style="margin-bottom:16px;">
+              <div class="field">
+                <label>Valor anunciado</label>
+                <div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${entry.valor.toFixed(2).replace('.', ',')}"></div>
+              </div>
+            </div>
+            <div class="table-scroll">
+              <table id="edit-table-${entry.id}">
+                <thead><tr>
+                  <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Ret. op. crédito</th>
+                  <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
+                  <th>Desp. operacional</th><th>Sobra</th><th>Res %</th>
+                </tr></thead>
+                <tbody>${rowsHtml}</tbody>
+              </table>
+            </div>
+            <div style="display:flex;gap:10px;margin-top:16px;">
+              <button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px;">Salvar alterações</button>
+              <button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0;">Cancelar</button>
+            </div>
+          </div>
+        </details>`;
+    }
+
     const rowsHtml = entry.rows.map(r => {
       const cls = r.sobra >= 0 ? 'pos' : 'neg';
       return `<tr>
@@ -1170,6 +1305,10 @@ function renderHistory(){
         <summary>
           <span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span>
           <span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</span>
+          <span class="h-actions">
+            <button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button>
+            <button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button>
+          </span>
         </summary>
         <div class="h-body">
           <div class="table-scroll">
@@ -1185,6 +1324,95 @@ function renderHistory(){
         </div>
       </details>`;
   }).join('');
+
+  // wire up edit-mode live recalculation
+  if (editingEntryId){
+    const entry = state.history.find(e => e.id === editingEntryId);
+    if (entry){
+      const table = document.getElementById(`edit-table-${entry.id}`);
+      const valorInput = document.getElementById(`edit-valor-${entry.id}`);
+      const updateEditRow = (idx) => {
+        const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
+        const valor = parseNumberInput(valorInput.value) || 0;
+        const frete = parseNumberInput(row.querySelector('[data-edit-field="frete"]').value) || 0;
+        const retencao = parseNumberInput(row.querySelector('[data-edit-field="retencao"]').value) || 0;
+        const retOpCreditoR = parseNumberInput(row.querySelector('[data-edit-field="retOpCreditoR"]').value) || 0;
+        const custo = parseNumberInput(row.querySelector('[data-edit-field="custo"]').value) || 0;
+        const despOpR = parseNumberInput(row.querySelector('[data-edit-field="despOpR"]').value) || 0;
+        const recLiquido = valor - frete - retencao - retOpCreditoR;
+        const resultadoLiqVenda = recLiquido - custo;
+        const sobra = resultadoLiqVenda - despOpR;
+        const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
+        const cls = isNaN(sobra) ? '' : (sobra >= 0 ? 'pos' : 'neg');
+        row.querySelector('[data-edit-out="recLiquido"]').textContent = `R$ ${fmt(recLiquido)}`;
+        row.querySelector('[data-edit-out="resultadoLiqVenda"]').textContent = `R$ ${fmt(resultadoLiqVenda)}`;
+        const sobraCell = row.querySelector('[data-edit-out="sobra"]');
+        sobraCell.textContent = `R$ ${fmt(sobra)}`;
+        sobraCell.className = cls;
+        const pctCell = row.querySelector('[data-edit-out="resultadoPct"]');
+        pctCell.textContent = `${fmt(resultadoPct)}%`;
+        pctCell.className = cls;
+      };
+      entry.rows.forEach((_, idx) => {
+        const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
+        row.querySelectorAll('[data-edit-field]').forEach(inp => {
+          inp.addEventListener('input', () => updateEditRow(idx));
+        });
+        updateEditRow(idx);
+      });
+      valorInput.addEventListener('input', () => entry.rows.forEach((_, idx) => updateEditRow(idx)));
+
+      document.querySelector(`[data-edit-save="${entry.id}"]`).addEventListener('click', async () => {
+        const valor = parseNumberInput(valorInput.value) || 0;
+        const newRows = entry.rows.map((r, idx) => {
+          const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
+          const frete = parseNumberInput(row.querySelector('[data-edit-field="frete"]').value) || 0;
+          const retencao = parseNumberInput(row.querySelector('[data-edit-field="retencao"]').value) || 0;
+          const retOpCreditoR = parseNumberInput(row.querySelector('[data-edit-field="retOpCreditoR"]').value) || 0;
+          const custo = parseNumberInput(row.querySelector('[data-edit-field="custo"]').value) || 0;
+          const despOpR = parseNumberInput(row.querySelector('[data-edit-field="despOpR"]').value) || 0;
+          const recLiquido = valor - frete - retencao - retOpCreditoR;
+          const resultadoLiqVenda = recLiquido - custo;
+          const sobra = resultadoLiqVenda - despOpR;
+          const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
+          return { nome: r.nome, frete, retencao, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct };
+        });
+        entry.valor = valor;
+        entry.rows = newRows;
+        if (firebaseReady){
+          try{ await db.collection('simulacoes').doc(entry.id).update({ valor, rows: newRows }); }
+          catch(e){ /* segue mesmo assim, fica salvo localmente */ }
+        }
+        editingEntryId = null;
+        renderHistory();
+      });
+      document.querySelector(`[data-edit-cancel="${entry.id}"]`).addEventListener('click', () => {
+        editingEntryId = null;
+        renderHistory();
+      });
+    }
+  }
+
+  container.querySelectorAll('[data-history-edit]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.preventDefault(); e.stopPropagation();
+      editingEntryId = btn.dataset.historyEdit;
+      renderHistory();
+    });
+  });
+  container.querySelectorAll('[data-history-delete]').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.preventDefault(); e.stopPropagation();
+      if (!confirm('Excluir essa simulação do histórico?')) return;
+      const id = btn.dataset.historyDelete;
+      if (firebaseReady){
+        try{ await db.collection('simulacoes').doc(id).delete(); }
+        catch(err){ /* remove local mesmo assim */ }
+      }
+      state.history = state.history.filter(e => e.id !== id);
+      renderHistory();
+    });
+  });
 }
 
 document.getElementById('tab-calc').addEventListener('click', () => {
@@ -1203,17 +1431,7 @@ document.getElementById('tab-history').addEventListener('click', () => {
     : 'Modo local — Firebase ainda não configurado, esse histórico fica só neste navegador.';
   loadHistory();
 });
-document.getElementById('clear-history-btn').addEventListener('click', async () => {
-  if (!confirm('Limpar todo o histórico de simulações para TODOS os usuários?')) return;
-  if (firebaseReady){
-    const snapshot = await db.collection('simulacoes').get();
-    const batch = db.batch();
-    snapshot.docs.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
-  }
-  state.history = [];
-  renderHistory();
-});
+document.getElementById('history-search-input').addEventListener('input', renderHistory);
 
 async function loadHistory(){
   const container = document.getElementById('history-list');
@@ -1265,6 +1483,64 @@ document.getElementById('save-btn').addEventListener('click', async () => {
     status.textContent = 'Erro ao salvar';
   }
 });
+
+// ============================================================
+// LUPA — amplia a área embaixo do cursor em tempo real
+// ============================================================
+(function setupMagnifier(){
+  const toggleBtn = document.getElementById('magnifier-toggle');
+  const lens = document.getElementById('magnifier-lens');
+  const inner = document.getElementById('magnifier-inner');
+  const SCALE = 2.3;
+  const RADIUS = 100; // metade do tamanho da lente (200px)
+  let active = false;
+  let refreshTimer = null;
+
+  function refreshContent(){
+    const clone = document.body.cloneNode(true);
+    clone.querySelectorAll('.magnifier-lens, .magnifier-toggle').forEach(el => el.remove());
+    clone.style.width = document.body.scrollWidth + 'px';
+    clone.style.minHeight = document.body.scrollHeight + 'px';
+    clone.style.margin = '0';
+    clone.style.cursor = 'default';
+    inner.innerHTML = '';
+    inner.appendChild(clone);
+  }
+
+  function onMouseMove(e){
+    lens.style.left = (e.clientX - RADIUS) + 'px';
+    lens.style.top = (e.clientY - RADIUS) + 'px';
+    const pageX = e.clientX + window.scrollX;
+    const pageY = e.clientY + window.scrollY;
+    const tx = -pageX + RADIUS / SCALE;
+    const ty = -pageY + RADIUS / SCALE;
+    inner.style.transform = `scale(${SCALE}) translate(${tx}px, ${ty}px)`;
+  }
+
+  function activate(){
+    active = true;
+    toggleBtn.classList.add('active');
+    toggleBtn.title = 'Desativar lupa';
+    document.body.classList.add('magnifier-active');
+    lens.style.display = 'block';
+    refreshContent();
+    refreshTimer = setInterval(refreshContent, 1000);
+    document.addEventListener('mousemove', onMouseMove);
+  }
+
+  function deactivate(){
+    active = false;
+    toggleBtn.classList.remove('active');
+    toggleBtn.title = 'Ativar lupa';
+    document.body.classList.remove('magnifier-active');
+    lens.style.display = 'none';
+    if (refreshTimer) clearInterval(refreshTimer);
+    document.removeEventListener('mousemove', onMouseMove);
+  }
+
+  toggleBtn.addEventListener('click', () => { active ? deactivate() : activate(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && active) deactivate(); });
+})();
 
 (async function init(){
   await loadState();
