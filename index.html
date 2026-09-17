@@ -4647,9 +4647,27 @@ async function loadState(){
     const raw = localStorage.getItem('calc-precos:state');
     if (raw){
       const loaded = JSON.parse(raw);
-      state = Object.assign(state, loaded);
+      if (loaded && typeof loaded === 'object'){
+        state = Object.assign({}, state, loaded);
+        state.params = Object.assign(
+          { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15 },
+          state.params || {},
+          loaded.params || {}
+        );
+      }
     }
-  } catch(e){ /* no saved state yet, or storage unavailable */ }
+  } catch(e){ /* dado salvo corrompido ou storage indisponível — segue com os padrões */ }
+  if (!state.params) state.params = { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15 };
+  if (!Array.isArray(state.history)) state.history = [];
+  if (!Array.isArray(state.platforms) || !state.platforms.length) {
+    state.platforms = [
+      { id: 1, nome: 'Site Próprio', comissao: 0,  freteAplica: false, retOpCredito: 5 },
+      { id: 2, nome: 'ML Premium',   comissao: 17, freteAplica: true,  retOpCredito: 0 },
+      { id: 3, nome: 'ML Clássico',  comissao: 12, freteAplica: true,  retOpCredito: 0 },
+      { id: 4, nome: 'Shopee',       comissao: 14, freteAplica: true,  retOpCredito: 0 },
+    ];
+  }
+  if (!state.simOverrides || typeof state.simOverrides !== 'object') state.simOverrides = {};
 }
 
 function buildHistoryEntry(product, valor){
@@ -5125,15 +5143,19 @@ async function loadNauberFromSheet(){
 document.getElementById('sheet-refresh-btn').addEventListener('click', loadNauberFromSheet);
 
 (async function init(){
-  await loadState();
-  document.getElementById('p-classe').value = state.params.classe == null ? '' : state.params.classe;
-  document.getElementById('p-comissao').value = state.params.comissao;
-  document.getElementById('p-du').value = state.params.du;
-  document.getElementById('p-adicional').value = state.params.adicional == null ? '' : state.params.adicional;
-  document.getElementById('p-despop').value = state.params.despop;
-  renderPlatforms();
-  renderProductIdList();
-  renderSimulation();
+  try{
+    await loadState();
+    document.getElementById('p-classe').value = state.params.classe == null ? '' : state.params.classe;
+    document.getElementById('p-comissao').value = state.params.comissao;
+    document.getElementById('p-du').value = state.params.du;
+    document.getElementById('p-adicional').value = state.params.adicional == null ? '' : state.params.adicional;
+    document.getElementById('p-despop').value = state.params.despop;
+    renderPlatforms();
+    renderProductIdList();
+    renderSimulation();
+  } catch(e){
+    console.error('Erro ao iniciar o app:', e);
+  }
   loadNauberFromSheet();
 })();
 </script>
