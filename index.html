@@ -432,7 +432,10 @@
           <option value="neg">Negativo (vermelho)</option>
         </select>
       </div>
-      <button class="add-btn" id="generate-pdf-btn" type="button" style="margin:0 0 18px;">Gerar PDF do que está filtrado</button>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px;">
+        <button class="add-btn" id="generate-pdf-btn" type="button" style="margin:0;">Gerar PDF do que está filtrado</button>
+        <span id="history-count" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);"></span>
+      </div>
       <div id="history-list"></div>
     </div>
   </div>
@@ -4550,9 +4553,15 @@ function renderSimulation(){
   }
   const custo = valorCusto(product.valorBase);
   const classeMissing = isNaN(custo);
-  const warning = classeMissing
+  const classeWarning = classeMissing
     ? '<div class="empty" style="color:var(--neg);font-style:normal;margin-bottom:14px;">Preencha o Desconto Classe na Parametrização para calcular o custo deste produto.</div>'
     : '';
+
+  const existing = state.history.filter(e => String(e.productId) === String(product.id));
+  const dupWarning = existing.length
+    ? `<div class="empty" style="color:#8a6d1d;font-style:normal;margin-bottom:14px;background:#fdf6e3;border-radius:10px;padding:10px 14px;">⚠ Já existe ${existing.length > 1 ? `${existing.length} simulações salvas` : 'uma simulação salva'} pra esse item (a mais recente em ${formatDateTime(existing[0].savedAt)}, valor anunciado R$ ${fmt(existing[0].valor)}). Salvar de novo cria um novo registro no histórico.</div>`
+    : '';
+  const warning = classeWarning + dupWarning;
 
   let rows = '';
   state.platforms.forEach(pl => {
@@ -4733,6 +4742,11 @@ function getFilteredHistory(){
 function renderHistory(){
   const container = document.getElementById('history-list');
   const filtered = getFilteredHistory();
+  const countEl = document.getElementById('history-count');
+  const hasActiveFilter = filtered.length !== state.history.length;
+  countEl.textContent = hasActiveFilter
+    ? `${filtered.length} de ${state.history.length} simulações`
+    : `${state.history.length} simulaç${state.history.length === 1 ? 'ão' : 'ões'} no total`;
 
   if (!state.history.length){
     container.innerHTML = '<div class="empty">Nenhuma simulação salva ainda.</div>';
@@ -5041,20 +5055,21 @@ document.getElementById('save-btn').addEventListener('click', async () => {
     if (hasSimulation){
       const entry = buildHistoryEntry(product, valor);
       if (firebaseReady){
-        await db.collection('simulacoes').add({
+        const docRef = await db.collection('simulacoes').add({
           productId: entry.productId,
           productDesc: entry.productDesc,
           valor: entry.valor,
           rows: entry.rows,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
         });
-      } else {
-        state.history.unshift(entry);
+        entry.id = docRef.id;
       }
+      state.history.unshift(entry);
     }
     localStorage.setItem('calc-precos:state', JSON.stringify(state));
     status.textContent = firebaseReady ? 'Salvo na nuvem ✓' : 'Salvo ✓';
     setTimeout(() => status.textContent = '', 2500);
+    renderSimulation();
     if (document.getElementById('view-historico').style.display !== 'none') loadHistory();
   } catch(e){
     status.textContent = 'Erro ao salvar';
@@ -5157,6 +5172,7 @@ document.getElementById('sheet-refresh-btn').addEventListener('click', loadNaube
     console.error('Erro ao iniciar o app:', e);
   }
   loadNauberFromSheet();
+  loadHistory().then(renderSimulation);
 })();
 </script>
 </body>
