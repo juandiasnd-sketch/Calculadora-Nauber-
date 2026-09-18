@@ -5032,7 +5032,7 @@ async function loadHistory(){
   }
   container.innerHTML = '<div class="empty">Carregando histórico da equipe...</div>';
   try{
-    const snapshot = await db.collection('simulacoes').orderBy('savedAt', 'desc').limit(200).get();
+    const snapshot = await db.collection('simulacoes').orderBy('savedAt', 'desc').get();
     state.history = snapshot.docs.map(doc => {
       const d = doc.data();
       return { ...d, id: doc.id, savedAt: d.savedAt ? d.savedAt.toDate().toISOString() : new Date().toISOString() };
