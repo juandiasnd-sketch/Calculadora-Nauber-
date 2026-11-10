@@ -355,6 +355,10 @@
         <label>Despesa operacional</label>
         <div><input type="text" inputmode="decimal" id="p-despop" value="15"><span class="unit">%</span></div>
       </div>
+      <div class="field">
+        <label>Lucro desejado sobre a venda</label>
+        <div><input type="text" inputmode="decimal" id="p-lucro" value="10"><span class="unit">%</span></div>
+      </div>
     </div>
   </div>
 
@@ -519,14 +523,26 @@ function valorCusto(valorBase){
   return valorBase * pct - adicional;
 }
 
-function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct){
-  const retOpCreditoR = (retOpCreditoPct/100) * valor;
-  const recLiquido = valor - frete - retencao - retOpCreditoR;
+function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct = 0){
+  const comissaoR = (comissaoPct / 100) * valor;
+  const retOpCreditoR = (retOpCreditoPct / 100) * valor;
+  const recLiquido = valor - frete - retencao - retOpCreditoR - comissaoR;
   const resultadoLiqVenda = recLiquido - custo;
-  const despOpR = (despopPct/100) * valor;
+  const despOpR = (despopPct / 100) * valor;
   const sobra = resultadoLiqVenda - despOpR;
-  const resultadoPct = valor ? (sobra/valor)*100 : NaN;
-  return { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct };
+  const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
+  return { comissaoR, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct };
+}
+
+// Preço mínimo que cobre custo, frete, retenção, comissão, crédito,
+// despesas operacionais e a margem de lucro desejada sobre o preço de venda.
+function precoSugerido(custo, frete, retencao, comissaoPct, retOpCreditoPct, despopPct, lucroPct){
+  const taxas = [comissaoPct, retOpCreditoPct, despopPct, lucroPct].map(Number);
+  const denominador = 1 - taxas.reduce((a,b) => a + b, 0) / 100;
+  const totalFixo = Number(custo) + Number(frete) + Number(retencao);
+  if (!Number.isFinite(totalFixo) || totalFixo < 0 || taxas.some(t => !Number.isFinite(t) || t < 0) || denominador <= 0) return NaN;
+  // Arredondar sempre para cima, evitando ficar abaixo da margem desejada.
+  return Math.ceil((totalFixo / denominador - 1e-9) * 100) / 100;
 }
 
 function getOverride(productId, platformId){
@@ -553,6 +569,7 @@ function readParams(){
   state.params.du = parseNumberInput(document.getElementById('p-du').value) || 0;
   state.params.adicional = parseNumberInput(document.getElementById('p-adicional').value) || 0;
   state.params.despop = parseNumberInput(document.getElementById('p-despop').value) || 0;
+  state.params.lucro = parseNumberInput(document.getElementById('p-lucro').value) || 0;
 }
 
 function renderPlatforms(){
@@ -567,7 +584,7 @@ function renderPlatforms(){
       <td><input class="num-input" data-field="retOpCredito" type="text" inputmode="decimal" value="${pl.retOpCredito}"></td>
       <td><button class="icon-btn" data-del="${pl.id}" title="Remover">✕</button></td>
     `;
-    tr.querySelectorAll('input[type=number], input.desc-input').forEach(inp => {
+    tr.querySelectorAll('input[data-field]:not([type=checkbox])').forEach(inp => {
       inp.addEventListener('input', () => {
         const field = inp.dataset.field;
         pl[field] = field === 'nome' ? inp.value : (parseNumberInput(inp.value) || 0);
@@ -666,11 +683,16 @@ function updateSimRow(product, platform, valor){
   const ov = getOverride(product.id, platform.id);
   const frete = ov.frete != null ? ov.frete : defaultFrete(platform, product);
   const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(platform, valor);
-  const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop);
+  const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop, platform.comissao);
   const cls = isNaN(sobra) ? '' : (sobra >= 0 ? 'pos' : 'neg');
 
   const row = document.getElementById(`sim-row-${platform.id}`);
   if (!row) return;
+  const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro);
+  const sugeridoCell = row.querySelector('[data-out=sugerido]');
+  sugeridoCell.textContent = Number.isFinite(sugerido) ? `R$ ${fmt(sugerido)}` : 'Inviável';
+  sugeridoCell.title = Number.isFinite(sugerido) ? `Preço mínimo para ${fmt(state.params.lucro)}% de lucro sobre a venda, com todas as taxas configuradas.` : 'Verifique custo e percentuais: a soma das taxas e da margem deve ser menor que 100%.';
+  row.querySelector('[data-out=comissao]').textContent = `R$ ${fmt((platform.comissao / 100) * valor)}`;
   row.querySelector('[data-out=retop]').textContent = `R$ ${fmt(retOpCreditoR)}`;
   row.querySelector('[data-out=recliq]').textContent = `R$ ${fmt(recLiquido)}`;
   row.querySelector('[data-out=custo]').textContent = `R$ ${fmt(custo)}`;
@@ -716,6 +738,7 @@ function renderSimulation(){
         <td class="desc-cell">${pl.nome}</td>
         <td data-label="Frete"><input class="num-input" data-row-field="frete" type="text" inputmode="decimal" value="${frete.toFixed(2).replace('.', ',')}"></td>
         <td data-label="Retenção"><input class="num-input" data-row-field="retencao" type="text" inputmode="decimal" value="${retencao.toFixed(2).replace('.', ',')}"></td>
+        <td data-label="Comissão" data-out="comissao"></td>
         <td data-label="Ret. op. crédito" data-out="retop"></td>
         <td data-label="Rec. líquido" data-out="recliq"></td>
         <td data-label="Custo" data-out="custo"></td>
@@ -723,6 +746,7 @@ function renderSimulation(){
         <td data-label="Desp. operacional" data-out="despop"></td>
         <td data-label="Sobra" data-out="sobra"></td>
         <td data-label="Res %" data-out="pct"></td>
+        <td data-label="Preço sugerido" data-out="sugerido" style="font-weight:700;color:var(--pos);background:#eaf6ed;border-radius:8px;"></td>
       </tr>`;
   });
 
@@ -735,14 +759,14 @@ function renderSimulation(){
     <div class="table-scroll">
       <table>
         <thead><tr>
-          <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Ret. op. crédito</th>
+          <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
           <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-          <th>Desp. operacional</th><th>Sobra</th><th>Res %</th>
+          <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
         </tr></thead>
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">Frete e retenção vêm pré-calculados, mas podem ser digitados na mão para ajustar ao valor exato de cada plataforma.</p>
+    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">O preço sugerido é o mínimo calculado por plataforma para cobrir custo, comissão, taxa do cartão, frete, retenção e despesas operacionais, preservando a margem de lucro desejada sobre a venda. Ajuste frete e retenção conforme o anúncio real. Não inclui tributos ou tarifas fixas não informados.</p>
   `;
 
   state.platforms.forEach(pl => {
@@ -790,7 +814,7 @@ document.getElementById('csv-input').addEventListener('change', (e) => {
   reader.readAsText(file, 'UTF-8');
 });
 
-['p-classe','p-comissao','p-du','p-adicional','p-despop'].forEach(id => {
+['p-classe','p-comissao','p-du','p-adicional','p-despop','p-lucro'].forEach(id => {
   document.getElementById(id).addEventListener('input', renderSimulation);
 });
 
@@ -802,14 +826,14 @@ async function loadState(){
       if (loaded && typeof loaded === 'object'){
         state = Object.assign({}, state, loaded);
         state.params = Object.assign(
-          { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15 },
+          { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15, lucro: 10 },
           state.params || {},
           loaded.params || {}
         );
       }
     }
   } catch(e){ /* dado salvo corrompido ou storage indisponível — segue com os padrões */ }
-  if (!state.params) state.params = { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15 };
+  if (!state.params) state.params = { classe: null, comissao: 8, du: 9.08, adicional: null, despop: 15, lucro: 10 };
   if (!Array.isArray(state.history)) state.history = [];
   if (!Array.isArray(state.platforms) || !state.platforms.length) {
     state.platforms = [
@@ -829,8 +853,8 @@ function buildHistoryEntry(product, valor){
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valor);
     const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } =
-      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop);
-    return { nome: pl.nome, frete, retencao, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct };
+      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao);
+    return { nome: pl.nome, frete, retencao, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro) };
   });
   return {
     id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
@@ -932,9 +956,9 @@ function renderHistory(){
             <div class="table-scroll">
               <table id="edit-table-${entry.id}">
                 <thead><tr>
-                  <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Ret. op. crédito</th>
+                  <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
                   <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-                  <th>Desp. operacional</th><th>Sobra</th><th>Res %</th>
+                  <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
                 </tr></thead>
                 <tbody>${rowsHtml}</tbody>
               </table>
@@ -976,9 +1000,9 @@ function renderHistory(){
           <div class="table-scroll">
             <table>
               <thead><tr>
-                <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Ret. op. crédito</th>
+                <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
                 <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-                <th>Desp. operacional</th><th>Sobra</th><th>Res %</th>
+                <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
               </tr></thead>
               <tbody>${rowsHtml}</tbody>
             </table>
@@ -1146,9 +1170,9 @@ function generatePdfReport(){
         <div class="pr-sub">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</div>
         <table>
           <thead><tr>
-            <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Ret. op. crédito</th>
+            <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
             <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-            <th>Desp. operacional</th><th>Sobra</th><th>Res %</th>
+            <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
         </table>
@@ -1296,6 +1320,7 @@ document.getElementById('sheet-refresh-btn').addEventListener('click', loadNaube
     document.getElementById('p-du').value = state.params.du;
     document.getElementById('p-adicional').value = state.params.adicional == null ? '' : state.params.adicional;
     document.getElementById('p-despop').value = state.params.despop;
+  document.getElementById('p-lucro').value = state.params.lucro ?? 10;
     renderPlatforms();
     renderProductIdList();
     renderSimulation();
