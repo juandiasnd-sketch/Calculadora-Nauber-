@@ -863,6 +863,8 @@ function buildHistoryEntry(product, valor){
     productDesc: product.desc,
     valor,
     rows,
+    params: { ...state.params },
+    platformRates: Object.fromEntries(state.platforms.map(pl => [pl.nome, { comissao: pl.comissao, retOpCredito: pl.retOpCredito }])),
   };
 }
 
@@ -906,199 +908,130 @@ function getFilteredHistory(){
   });
 }
 
+function historyParams(entry){
+  return { ...state.params, ...(entry.params || {}) };
+}
+function historyRate(entry, r){
+  const saved = entry.platformRates?.[r.nome];
+  const platform = state.platforms.find(p => p.nome === r.nome);
+  return {
+    comissao: Number(saved?.comissao ?? r.comissaoPct ?? platform?.comissao ?? 0),
+    retOpCredito: Number(saved?.retOpCredito ?? r.retOpCreditoPct ?? platform?.retOpCredito ?? 0)
+  };
+}
+function historySuggested(entry, r, params){
+  const rates = historyRate(entry, r);
+  return precoSugerido(r.custo, r.frete, r.retencao, rates.comissao, rates.retOpCredito, params.despop || 0, params.lucro || 0);
+}
 function renderHistory(){
   const container = document.getElementById('history-list');
   const filtered = getFilteredHistory();
   const countEl = document.getElementById('history-count');
-  const hasActiveFilter = filtered.length !== state.history.length;
-  countEl.textContent = hasActiveFilter
+  countEl.textContent = filtered.length !== state.history.length
     ? `${filtered.length} de ${state.history.length} simulações`
     : `${state.history.length} simulaç${state.history.length === 1 ? 'ão' : 'ões'} no total`;
-
-  if (!state.history.length){
-    container.innerHTML = '<div class="empty">Nenhuma simulação salva ainda.</div>';
-    return;
-  }
   if (!filtered.length){
-    container.innerHTML = '<div class="empty">Nenhuma simulação encontrada para essa busca.</div>';
+    container.innerHTML = `<div class="empty">${state.history.length ? 'Nenhuma simulação encontrada para essa busca.' : 'Nenhuma simulação salva ainda.'}</div>`;
     return;
   }
   container.innerHTML = filtered.map(entry => {
+    const params = historyParams(entry);
     const isEditing = editingEntryId === entry.id;
-
+    const cols = `<th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th><th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th><th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>`;
     if (isEditing){
-      const rowsHtml = entry.rows.map((r, idx) => `
-        <tr data-edit-row="${idx}">
-          <td class="desc-cell">${r.nome}</td>
-          <td><input class="num-input" data-edit-field="frete" value="${r.frete.toFixed(2).replace('.', ',')}"></td>
-          <td><input class="num-input" data-edit-field="retencao" value="${r.retencao.toFixed(2).replace('.', ',')}"></td>
-          <td><input class="num-input" data-edit-field="retOpCreditoR" value="${r.retOpCreditoR.toFixed(2).replace('.', ',')}"></td>
+      const fields = [
+        ['classe','Desconto classe'], ['comissao','Desconto comissão'], ['du','Desconto à vista'],
+        ['adicional','Desconto adicional (R$)'], ['despop','Despesa operacional (%)'], ['lucro','Lucro desejado sobre a venda (%)']
+      ];
+      const paramHtml = fields.map(([key,label]) => `<label class="field" style="min-width:145px;flex:1"><span>${label}</span><input class="num-input" style="width:100%;max-width:190px" inputmode="decimal" data-edit-param="${key}" value="${params[key] == null ? '' : String(params[key]).replace('.', ',')}"></label>`).join('');
+      const rowsHtml = entry.rows.map((r,idx) => {
+        const rate = historyRate(entry,r);
+        const num = v => fmt(Number(v)||0);
+        return `<tr data-edit-row="${idx}"><td class="desc-cell">${r.nome}</td>
+          <td><input class="num-input" data-edit-field="frete" value="${num(r.frete)}"></td>
+          <td><input class="num-input" data-edit-field="retencao" value="${num(r.retencao)}"></td>
+          <td><input class="num-input" data-edit-field="comissaoPct" value="${num(rate.comissao)}"></td>
+          <td><input class="num-input" data-edit-field="retOpCreditoPct" value="${num(rate.retOpCredito)}"></td>
           <td data-edit-out="recLiquido"></td>
-          <td><input class="num-input" data-edit-field="custo" value="${r.custo.toFixed(2).replace('.', ',')}"></td>
-          <td data-edit-out="resultadoLiqVenda"></td>
-          <td><input class="num-input" data-edit-field="despOpR" value="${r.despOpR.toFixed(2).replace('.', ',')}"></td>
-          <td data-edit-out="sobra"></td>
-          <td data-edit-out="resultadoPct"></td>
-        </tr>`).join('');
-      return `
-        <details class="history-entry" open>
-          <summary>
-            <span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span>
-            <span class="h-meta">Editando…</span>
-          </summary>
-          <div class="h-body">
-            <div class="field-row" style="margin-bottom:16px;">
-              <div class="field">
-                <label>Valor anunciado</label>
-                <div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${entry.valor.toFixed(2).replace('.', ',')}"></div>
-              </div>
-            </div>
-            <div class="table-scroll">
-              <table id="edit-table-${entry.id}">
-                <thead><tr>
-                  <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
-                  <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-                  <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
-                </tr></thead>
-                <tbody>${rowsHtml}</tbody>
-              </table>
-            </div>
-            <div style="display:flex;gap:10px;margin-top:16px;">
-              <button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px;">Salvar alterações</button>
-              <button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0;">Cancelar</button>
-            </div>
-          </div>
-        </details>`;
+          <td><input class="num-input" data-edit-field="custo" value="${num(r.custo)}"></td>
+          <td data-edit-out="resultadoLiqVenda"></td><td data-edit-out="despOpR"></td>
+          <td data-edit-out="sobra"></td><td data-edit-out="resultadoPct"></td>
+          <td data-edit-out="precoSugerido"></td></tr>`;
+      }).join('');
+      return `<details class="history-entry" open><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">Editando…</span></summary>
+        <div class="h-body"><div class="field-row" style="margin-bottom:16px"><div class="field"><label>Valor anunciado</label><div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${fmt(entry.valor)}"></div></div></div>
+        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="field-row" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos de compra não alteram o custo já salvo; ajuste o custo na tabela se necessário.</small></div>
+        <div class="table-scroll"><table id="edit-table-${entry.id}"><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div>
+        <div style="display:flex;gap:10px;margin-top:16px"><button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px">Salvar alterações</button><button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0">Cancelar</button></div></div></details>`;
     }
-
     const rowsHtml = entry.rows.map(r => {
       const cls = r.sobra >= 0 ? 'pos' : 'neg';
-      return `<tr>
-        <td class="desc-cell">${r.nome}</td>
-        <td>R$ ${fmt(r.frete)}</td>
-        <td>R$ ${fmt(r.retencao)}</td>
-        <td>R$ ${fmt(r.retOpCreditoR)}</td>
-        <td>R$ ${fmt(r.recLiquido)}</td>
-        <td>R$ ${fmt(r.custo)}</td>
-        <td>R$ ${fmt(r.resultadoLiqVenda)}</td>
-        <td>R$ ${fmt(r.despOpR)}</td>
-        <td class="${cls}">R$ ${fmt(r.sobra)}</td>
-        <td class="${cls}">${fmt(r.resultadoPct)}%</td>
-      </tr>`;
+      const suggested = historySuggested(entry,r,params);
+      const rates = historyRate(entry,r);
+      return `<tr><td class="desc-cell">${r.nome}</td><td>R$ ${fmt(r.frete)}</td><td>R$ ${fmt(r.retencao)}</td><td>${fmt(rates.comissao)}%</td><td>R$ ${fmt(r.retOpCreditoR)}</td><td>R$ ${fmt(r.recLiquido)}</td><td>R$ ${fmt(r.custo)}</td><td>R$ ${fmt(r.resultadoLiqVenda)}</td><td>R$ ${fmt(r.despOpR)}</td><td class="${cls}">R$ ${fmt(r.sobra)}</td><td class="${cls}">${fmt(r.resultadoPct)}%</td><td><strong>${Number.isFinite(suggested) ? 'R$ '+fmt(suggested) : '—'}</strong></td></tr>`;
     }).join('');
-    return `
-      <details class="history-entry">
-        <summary>
-          <span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span>
-          <span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</span>
-          <span class="h-actions">
-            <button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button>
-            <button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button>
-          </span>
-        </summary>
-        <div class="h-body">
-          <div class="table-scroll">
-            <table>
-              <thead><tr>
-                <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
-                <th>Rec. líquido</th><th>Custo</th><th>Resultado líq. venda</th>
-                <th>Desp. operacional</th><th>Sobra</th><th>Res %</th><th>Preço sugerido para anunciar</th>
-              </tr></thead>
-              <tbody>${rowsHtml}</tbody>
-            </table>
-          </div>
-        </div>
-      </details>`;
+    return `<details class="history-entry"><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</span><span class="h-actions"><button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button><button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button></span></summary><div class="h-body"><div class="table-scroll"><table><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div></details>`;
   }).join('');
-
-  // wire up edit-mode live recalculation
   if (editingEntryId){
     const entry = state.history.find(e => e.id === editingEntryId);
     if (entry){
       const table = document.getElementById(`edit-table-${entry.id}`);
       const valorInput = document.getElementById(`edit-valor-${entry.id}`);
-      const updateEditRow = (idx) => {
-        const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
-        const valor = parseNumberInput(valorInput.value) || 0;
-        const frete = parseNumberInput(row.querySelector('[data-edit-field="frete"]').value) || 0;
-        const retencao = parseNumberInput(row.querySelector('[data-edit-field="retencao"]').value) || 0;
-        const retOpCreditoR = parseNumberInput(row.querySelector('[data-edit-field="retOpCreditoR"]').value) || 0;
-        const custo = parseNumberInput(row.querySelector('[data-edit-field="custo"]').value) || 0;
-        const despOpR = parseNumberInput(row.querySelector('[data-edit-field="despOpR"]').value) || 0;
-        const recLiquido = valor - frete - retencao - retOpCreditoR;
-        const resultadoLiqVenda = recLiquido - custo;
-        const sobra = resultadoLiqVenda - despOpR;
-        const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
-        const cls = isNaN(sobra) ? '' : (sobra >= 0 ? 'pos' : 'neg');
-        row.querySelector('[data-edit-out="recLiquido"]').textContent = `R$ ${fmt(recLiquido)}`;
-        row.querySelector('[data-edit-out="resultadoLiqVenda"]').textContent = `R$ ${fmt(resultadoLiqVenda)}`;
-        const sobraCell = row.querySelector('[data-edit-out="sobra"]');
-        sobraCell.textContent = `R$ ${fmt(sobra)}`;
-        sobraCell.className = cls;
-        const pctCell = row.querySelector('[data-edit-out="resultadoPct"]');
-        pctCell.textContent = `${fmt(resultadoPct)}%`;
-        pctCell.className = cls;
+      const paramInputs = [...container.querySelectorAll('[data-edit-param]')];
+      const getParams = () => {
+        const params = historyParams(entry);
+        paramInputs.forEach(inp => { const value = parseNumberInput(inp.value); params[inp.dataset.editParam] = inp.value.trim() === '' && inp.dataset.editParam === 'classe' ? null : (Number.isFinite(value) ? value : 0); });
+        return params;
       };
-      entry.rows.forEach((_, idx) => {
+      const readRow = (idx) => {
         const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
-        row.querySelectorAll('[data-edit-field]').forEach(inp => {
-          inp.addEventListener('input', () => updateEditRow(idx));
-        });
-        updateEditRow(idx);
-      });
-      valorInput.addEventListener('input', () => entry.rows.forEach((_, idx) => updateEditRow(idx)));
-
-      document.querySelector(`[data-edit-save="${entry.id}"]`).addEventListener('click', async () => {
+        const get = field => parseNumberInput(row.querySelector(`[data-edit-field="${field}"]`).value) || 0;
         const valor = parseNumberInput(valorInput.value) || 0;
-        const newRows = entry.rows.map((r, idx) => {
-          const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
-          const frete = parseNumberInput(row.querySelector('[data-edit-field="frete"]').value) || 0;
-          const retencao = parseNumberInput(row.querySelector('[data-edit-field="retencao"]').value) || 0;
-          const retOpCreditoR = parseNumberInput(row.querySelector('[data-edit-field="retOpCreditoR"]').value) || 0;
-          const custo = parseNumberInput(row.querySelector('[data-edit-field="custo"]').value) || 0;
-          const despOpR = parseNumberInput(row.querySelector('[data-edit-field="despOpR"]').value) || 0;
-          const recLiquido = valor - frete - retencao - retOpCreditoR;
-          const resultadoLiqVenda = recLiquido - custo;
-          const sobra = resultadoLiqVenda - despOpR;
-          const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
-          return { nome: r.nome, frete, retencao, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct };
-        });
-        entry.valor = valor;
-        entry.rows = newRows;
+        const params = getParams();
+        const frete=get('frete'),retencao=get('retencao'),custo=get('custo');
+        const comissaoPct=get('comissaoPct'),retOpCreditoPct=get('retOpCreditoPct');
+        const comissaoR=valor*comissaoPct/100,retOpCreditoR=valor*retOpCreditoPct/100;
+        const recLiquido=valor-frete-retencao-comissaoR-retOpCreditoR;
+        const resultadoLiqVenda=recLiquido-custo,despOpR=valor*(params.despop||0)/100;
+        const sobra=resultadoLiqVenda-despOpR,resultadoPct=valor?sobra/valor*100:NaN;
+        const preco=precoSugerido(custo,frete,retencao,comissaoPct,retOpCreditoPct,params.despop||0,params.lucro||0);
+        return { nome:entry.rows[idx].nome,frete,retencao,comissaoPct,comissaoR,retOpCreditoPct,retOpCreditoR,recLiquido,custo,resultadoLiqVenda,despOpR,sobra,resultadoPct,precoSugerido:preco };
+      };
+      const updateAll = () => entry.rows.forEach((_,idx) => {
+        const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
+        const r=readRow(idx);
+        for (const field of ['recLiquido','resultadoLiqVenda','despOpR','sobra']) row.querySelector(`[data-edit-out="${field}"]`).textContent=`R$ ${fmt(r[field])}`;
+        row.querySelector('[data-edit-out="resultadoPct"]').textContent=`${fmt(r.resultadoPct)}%`;
+        row.querySelector('[data-edit-out="precoSugerido"]').textContent=Number.isFinite(r.precoSugerido)?`R$ ${fmt(r.precoSugerido)}`:'—';
+        for (const field of ['sobra','resultadoPct']) row.querySelector(`[data-edit-out="${field}"]`).className=r.sobra>=0?'pos':'neg';
+      });
+      table.querySelectorAll('[data-edit-field]').forEach(inp=>inp.addEventListener('input',updateAll));
+      paramInputs.forEach(inp=>inp.addEventListener('input',updateAll));
+      valorInput.addEventListener('input',updateAll);
+      updateAll();
+      container.querySelector(`[data-edit-save="${entry.id}"]`).addEventListener('click',async()=>{
+        const valor=parseNumberInput(valorInput.value)||0;
+        const params=getParams();
+        const rows=entry.rows.map((_,idx)=>readRow(idx));
+        const platformRates=Object.fromEntries(rows.map(r=>[r.nome,{comissao:r.comissaoPct,retOpCredito:r.retOpCreditoPct}]));
         if (firebaseReady){
-          try{ await db.collection('simulacoes').doc(entry.id).update({ valor, rows: newRows }); }
-          catch(e){ /* segue mesmo assim, fica salvo localmente */ }
+          try{ await db.collection('simulacoes').doc(entry.id).update({valor,rows,params,platformRates}); }
+          catch(e){ alert('Não foi possível salvar na nuvem. Confira sua conexão e tente novamente.'); return; }
         }
-        editingEntryId = null;
-        renderHistory();
+        Object.assign(entry,{valor,rows,params,platformRates});
+        editingEntryId=null;renderHistory();
       });
-      document.querySelector(`[data-edit-cancel="${entry.id}"]`).addEventListener('click', () => {
-        editingEntryId = null;
-        renderHistory();
-      });
+      container.querySelector(`[data-edit-cancel="${entry.id}"]`).addEventListener('click',()=>{editingEntryId=null;renderHistory();});
     }
   }
-
-  container.querySelectorAll('[data-history-edit]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.preventDefault(); e.stopPropagation();
-      editingEntryId = btn.dataset.historyEdit;
-      renderHistory();
-    });
-  });
-  container.querySelectorAll('[data-history-delete]').forEach(btn => {
-    btn.addEventListener('click', async (e) => {
-      e.preventDefault(); e.stopPropagation();
-      if (!confirm('Excluir essa simulação do histórico?')) return;
-      const id = btn.dataset.historyDelete;
-      if (firebaseReady){
-        try{ await db.collection('simulacoes').doc(id).delete(); }
-        catch(err){ /* remove local mesmo assim */ }
-      }
-      state.history = state.history.filter(e => e.id !== id);
-      renderHistory();
-    });
-  });
+  container.querySelectorAll('[data-history-edit]').forEach(btn=>btn.addEventListener('click',e=>{e.preventDefault();e.stopPropagation();editingEntryId=btn.dataset.historyEdit;renderHistory();}));
+  container.querySelectorAll('[data-history-delete]').forEach(btn=>btn.addEventListener('click',async e=>{
+    e.preventDefault();e.stopPropagation();
+    if (!confirm('Excluir essa simulação do histórico?')) return;
+    const id=btn.dataset.historyDelete;
+    if(firebaseReady){try{await db.collection('simulacoes').doc(id).delete();}catch(err){alert('Não foi possível excluir na nuvem.');return;}}
+    state.history=state.history.filter(entry=>entry.id!==id);renderHistory();
+  }));
 }
 
 document.getElementById('tab-calc').addEventListener('click', () => {
