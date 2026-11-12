@@ -493,6 +493,7 @@ const FALLBACK_NAUBER_PRODUCTS = [{"id":"2830","desc":"PROJETORA DE MASSAS  NAUB
 
 let state = {
   products: [...FALLBACK_NAUBER_PRODUCTS, ...FIAT_PRODUCTS],
+  productPlatforms: {}, // seleção de plataformas por produto; ausência = todas
   simOverrides: {}, // { [productId]: { [platformId]: { frete: n|null, retencao: n|null } } }
   history: [], // [{ id, savedAt, productId, productDesc, valor, rows: [...] }]
   nextPlatformId: 5,
@@ -516,15 +517,15 @@ function parseNumberInput(raw){
   return parseFloat(s);
 }
 
-function valorCusto(valorBase){
-  const { classe, comissao, du, adicional } = state.params;
+function valorCusto(valorBase, params = state.params){
+  const { classe, comissao, du, adicional } = params;
   if (classe == null || isNaN(classe)) return NaN;
   const pct = 1 - (classe + comissao + du) / 100;
   return valorBase * pct - adicional;
 }
 
-function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct = 0){
-  const comissaoR = (comissaoPct / 100) * valor;
+function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct = 0, comissaoFixa = null){
+  const comissaoR = comissaoFixa == null ? (comissaoPct / 100) * valor : Number(comissaoFixa);
   const retOpCreditoR = (retOpCreditoPct / 100) * valor;
   const recLiquido = valor - frete - retencao - retOpCreditoR - comissaoR;
   const resultadoLiqVenda = recLiquido - custo;
@@ -536,13 +537,15 @@ function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comi
 
 // Preço mínimo que cobre custo, frete, retenção, comissão, crédito,
 // despesas operacionais e a margem de lucro desejada sobre o preço de venda.
-function precoSugerido(custo, frete, retencao, comissaoPct, retOpCreditoPct, despopPct, lucroPct){
+function precoSugerido(custo, frete, retencao, comissaoPct, retOpCreditoPct, despopPct, lucroPct, comissaoFixa = null){
   const taxas = [comissaoPct, retOpCreditoPct, despopPct, lucroPct].map(Number);
   const denominador = 1 - taxas.reduce((a,b) => a + b, 0) / 100;
-  const totalFixo = Number(custo) + Number(frete) + Number(retencao);
-  if (!Number.isFinite(totalFixo) || totalFixo < 0 || taxas.some(t => !Number.isFinite(t) || t < 0) || denominador <= 0) return NaN;
+  const totalFixo = Number(custo) + Number(frete) + Number(retencao) + (comissaoFixa == null ? 0 : Number(comissaoFixa));
+  if (comissaoFixa != null) taxas[0] = 0;
+  const denominadorCorrigido = 1 - taxas.reduce((a,b) => a + b, 0) / 100;
+  if (!Number.isFinite(totalFixo) || totalFixo < 0 || taxas.some(t => !Number.isFinite(t) || t < 0) || denominadorCorrigido <= 0) return NaN;
   // Arredondar sempre para cima, evitando ficar abaixo da margem desejada.
-  return Math.ceil((totalFixo / denominador - 1e-9) * 100) / 100;
+  return Math.ceil((totalFixo / denominadorCorrigido - 1e-9) * 100) / 100;
 }
 
 function getOverride(productId, platformId){
@@ -683,16 +686,17 @@ function updateSimRow(product, platform, valor){
   const ov = getOverride(product.id, platform.id);
   const frete = ov.frete != null ? ov.frete : defaultFrete(platform, product);
   const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(platform, valor);
-  const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop, platform.comissao);
+  const comissaoFixa = ov.comissaoFixa == null ? null : ov.comissaoFixa;
+  const { comissaoR, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop, platform.comissao, comissaoFixa);
   const cls = isNaN(sobra) ? '' : (sobra >= 0 ? 'pos' : 'neg');
 
   const row = document.getElementById(`sim-row-${platform.id}`);
   if (!row) return;
-  const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro);
+  const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro, comissaoFixa);
   const sugeridoCell = row.querySelector('[data-out=sugerido]');
   sugeridoCell.textContent = Number.isFinite(sugerido) ? `R$ ${fmt(sugerido)}` : 'Inviável';
   sugeridoCell.title = Number.isFinite(sugerido) ? `Preço mínimo para ${fmt(state.params.lucro)}% de lucro sobre a venda, com todas as taxas configuradas.` : 'Verifique custo e percentuais: a soma das taxas e da margem deve ser menor que 100%.';
-  row.querySelector('[data-out=comissao]').textContent = `R$ ${fmt((platform.comissao / 100) * valor)}`;
+  row.querySelector('[data-out=comissao]').textContent = `R$ ${fmt(comissaoR)}`;
   row.querySelector('[data-out=retop]').textContent = `R$ ${fmt(retOpCreditoR)}`;
   row.querySelector('[data-out=recliq]').textContent = `R$ ${fmt(recLiquido)}`;
   row.querySelector('[data-out=custo]').textContent = `R$ ${fmt(custo)}`;
@@ -704,6 +708,22 @@ function updateSimRow(product, platform, valor){
   const pctCell = row.querySelector('[data-out=pct]');
   pctCell.textContent = `${fmt(resultadoPct)}%`;
   pctCell.className = cls;
+}
+
+function selectedPlatformIds(productId){
+  const saved = state.productPlatforms?.[String(productId)];
+  if (!Array.isArray(saved)) return state.platforms.map(p => String(p.id));
+  return saved.map(String);
+}
+function platformEnabled(productId, platformId){
+  return selectedPlatformIds(productId).includes(String(platformId));
+}
+function setPlatformEnabled(productId, platformId, enabled){
+  const selected = new Set(selectedPlatformIds(productId));
+  if (enabled) selected.add(String(platformId)); else selected.delete(String(platformId));
+  if (!state.productPlatforms) state.productPlatforms = {};
+  state.productPlatforms[String(productId)] = [...selected];
+  try { localStorage.setItem('calc-precos:state', JSON.stringify(state)); } catch(e){}
 }
 
 function renderSimulation(){
@@ -729,7 +749,7 @@ function renderSimulation(){
   const warning = classeWarning + dupWarning;
 
   let rows = '';
-  state.platforms.forEach(pl => {
+  state.platforms.filter(pl => platformEnabled(product.id, pl.id)).forEach(pl => {
     const ov = getOverride(product.id, pl.id);
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valor);
@@ -738,7 +758,7 @@ function renderSimulation(){
         <td class="desc-cell">${pl.nome}</td>
         <td data-label="Frete"><input class="num-input" data-row-field="frete" type="text" inputmode="decimal" value="${frete.toFixed(2).replace('.', ',')}"></td>
         <td data-label="Retenção"><input class="num-input" data-row-field="retencao" type="text" inputmode="decimal" value="${retencao.toFixed(2).replace('.', ',')}"></td>
-        <td data-label="Comissão" data-out="comissao"></td>
+        <td data-label="Comissão"><input class="num-input" data-row-field="comissaoFixa" type="text" inputmode="decimal" placeholder="% padrão" title="Tarifa de venda em reais informada pelo marketplace. Deixe vazio para usar o percentual da plataforma." value="${ov.comissaoFixa == null ? '' : fmt(ov.comissaoFixa)}"><small style="display:block;color:#777">R$ tarifa; vazio = ${fmt(pl.comissao)}%</small></td>
         <td data-label="Ret. op. crédito" data-out="retop"></td>
         <td data-label="Rec. líquido" data-out="recliq"></td>
         <td data-label="Custo" data-out="custo"></td>
@@ -756,7 +776,13 @@ function renderSimulation(){
       <span class="name">${product.id} — ${product.desc || '(sem descrição)'}</span>
       <span class="cost">valor anunciado R$ ${fmt(valor)}</span>
     </div>
-    <div class="table-scroll">
+    <div style="margin:12px 0 16px;padding:12px 14px;border:1px solid #dbe8de;border-radius:12px;background:#f7fbf8">
+      <strong style="display:block;margin-bottom:8px">Plataformas utilizadas neste produto</strong>
+      <div style="display:flex;flex-wrap:wrap;gap:12px 22px">${state.platforms.map(pl => `<label style="display:inline-flex;align-items:center;gap:7px;cursor:pointer"><input type="checkbox" data-sim-platform="${pl.id}" ${platformEnabled(product.id,pl.id)?'checked':''}> ${pl.nome}</label>`).join('')}</div>
+      <small style="display:block;margin-top:8px;color:#666">Marque apenas os tipos de anúncio que serão usados. A seleção é individual por produto e será salva no histórico.</small>
+    </div>
+    ${rows ? '' : '<div class="empty">Selecione pelo menos uma plataforma para calcular.</div>'}
+    <div class="table-scroll" style="${rows ? '' : 'display:none'}">
       <table>
         <thead><tr>
           <th>Plataforma</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
@@ -766,16 +792,20 @@ function renderSimulation(){
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">O preço sugerido é o mínimo calculado por plataforma para cobrir custo, comissão, taxa do cartão, frete, retenção e despesas operacionais, preservando a margem de lucro desejada sobre a venda. Ajuste frete e retenção conforme o anúncio real. Não inclui tributos ou tarifas fixas não informados.</p>
+    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">Para conferir com o Mercado Livre, informe a tarifa de venda exata em R$ na coluna Comissão e o custo de envio em Frete. A tarifa em reais substitui o percentual apenas nesta simulação. O preço sugerido é o mínimo calculado por plataforma para cobrir custo, comissão, taxa do cartão, frete, retenção e despesas operacionais, preservando a margem de lucro desejada sobre a venda. Ajuste frete e retenção conforme o anúncio real. Não inclui tributos ou tarifas fixas não informados.</p>
   `;
 
-  state.platforms.forEach(pl => {
+  container.querySelectorAll('[data-sim-platform]').forEach(inp => inp.addEventListener('change', () => {
+    setPlatformEnabled(product.id, inp.dataset.simPlatform, inp.checked);
+    renderSimulation();
+  }));
+  state.platforms.filter(pl => platformEnabled(product.id, pl.id)).forEach(pl => {
     const row = document.getElementById(`sim-row-${pl.id}`);
     row.querySelectorAll('[data-row-field]').forEach(inp => {
       inp.addEventListener('input', () => {
         const field = inp.dataset.rowField;
         const val = parseNumberInput(inp.value);
-        setOverride(product.id, pl.id, field, isNaN(val) ? 0 : val);
+        setOverride(product.id, pl.id, field, inp.value.trim() === '' && field === 'comissaoFixa' ? null : (isNaN(val) ? 0 : val));
         updateSimRow(product, pl, parseNumberInput(document.getElementById('sim-valor').value) || 0);
       });
     });
@@ -844,17 +874,18 @@ async function loadState(){
     ];
   }
   if (!state.simOverrides || typeof state.simOverrides !== 'object') state.simOverrides = {};
+  if (!state.productPlatforms || typeof state.productPlatforms !== 'object') state.productPlatforms = {};
 }
 
 function buildHistoryEntry(product, valor){
   const custo = valorCusto(product.valorBase);
-  const rows = state.platforms.map(pl => {
+  const rows = state.platforms.filter(pl => platformEnabled(product.id, pl.id)).map(pl => {
     const ov = getOverride(product.id, pl.id);
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valor);
     const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } =
-      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao);
-    return { nome: pl.nome, frete, retencao, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro) };
+      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao, ov.comissaoFixa);
+    return { nome: pl.nome, frete, retencao, comissaoFixa: ov.comissaoFixa ?? null, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro, ov.comissaoFixa) };
   });
   return {
     id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
@@ -862,7 +893,9 @@ function buildHistoryEntry(product, valor){
     productId: product.id,
     productDesc: product.desc,
     valor,
+    valorBase: product.valorBase,
     rows,
+    selectedPlatforms: rows.map(r => r.nome),
     params: { ...state.params },
     platformRates: Object.fromEntries(state.platforms.map(pl => [pl.nome, { comissao: pl.comissao, retOpCredito: pl.retOpCredito }])),
   };
@@ -921,7 +954,7 @@ function historyRate(entry, r){
 }
 function historySuggested(entry, r, params){
   const rates = historyRate(entry, r);
-  return precoSugerido(r.custo, r.frete, r.retencao, rates.comissao, rates.retOpCredito, params.despop || 0, params.lucro || 0);
+  return precoSugerido(r.custo, r.frete, r.retencao, rates.comissao, rates.retOpCredito, params.despop || 0, params.lucro || 0, r.comissaoFixa ?? null);
 }
 function renderHistory(){
   const container = document.getElementById('history-list');
@@ -950,7 +983,7 @@ function renderHistory(){
         return `<tr data-edit-row="${idx}"><td class="desc-cell">${r.nome}</td>
           <td><input class="num-input" data-edit-field="frete" value="${num(r.frete)}"></td>
           <td><input class="num-input" data-edit-field="retencao" value="${num(r.retencao)}"></td>
-          <td><input class="num-input" data-edit-field="comissaoPct" value="${num(rate.comissao)}"></td>
+          <td><input class="num-input" data-edit-field="comissaoPct" title="Percentual de comissão" value="${num(rate.comissao)}"><input class="num-input" data-edit-field="comissaoFixa" title="Tarifa real em R$ (vazio para percentual)" placeholder="R$ tarifa" value="${r.comissaoFixa == null ? '' : num(r.comissaoFixa)}"></td>
           <td><input class="num-input" data-edit-field="retOpCreditoPct" value="${num(rate.retOpCredito)}"></td>
           <td data-edit-out="recLiquido"></td>
           <td><input class="num-input" data-edit-field="custo" value="${num(r.custo)}"></td>
@@ -960,7 +993,7 @@ function renderHistory(){
       }).join('');
       return `<details class="history-entry" open><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">Editando…</span></summary>
         <div class="h-body"><div class="field-row" style="margin-bottom:16px"><div class="field"><label>Valor anunciado</label><div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${fmt(entry.valor)}"></div></div></div>
-        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="field-row" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos de compra não alteram o custo já salvo; ajuste o custo na tabela se necessário.</small></div>
+        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="field-row" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos recalculam o custo usando o valor base do produto, quando disponível. Para uma tarifa exata do marketplace, preencha R$ tarifa na coluna Comissão; deixe vazio para usar %.</small></div>
         <div class="table-scroll"><table id="edit-table-${entry.id}"><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div>
         <div style="display:flex;gap:10px;margin-top:16px"><button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px">Salvar alterações</button><button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0">Cancelar</button></div></div></details>`;
     }
@@ -990,12 +1023,14 @@ function renderHistory(){
         const params = getParams();
         const frete=get('frete'),retencao=get('retencao'),custo=get('custo');
         const comissaoPct=get('comissaoPct'),retOpCreditoPct=get('retOpCreditoPct');
-        const comissaoR=valor*comissaoPct/100,retOpCreditoR=valor*retOpCreditoPct/100;
+        const tarifaInput = row.querySelector('[data-edit-field="comissaoFixa"]');
+        const comissaoFixa = tarifaInput.value.trim() === '' ? null : get('comissaoFixa');
+        const comissaoR=comissaoFixa == null ? valor*comissaoPct/100 : comissaoFixa,retOpCreditoR=valor*retOpCreditoPct/100;
         const recLiquido=valor-frete-retencao-comissaoR-retOpCreditoR;
         const resultadoLiqVenda=recLiquido-custo,despOpR=valor*(params.despop||0)/100;
         const sobra=resultadoLiqVenda-despOpR,resultadoPct=valor?sobra/valor*100:NaN;
-        const preco=precoSugerido(custo,frete,retencao,comissaoPct,retOpCreditoPct,params.despop||0,params.lucro||0);
-        return { nome:entry.rows[idx].nome,frete,retencao,comissaoPct,comissaoR,retOpCreditoPct,retOpCreditoR,recLiquido,custo,resultadoLiqVenda,despOpR,sobra,resultadoPct,precoSugerido:preco };
+        const preco=precoSugerido(custo,frete,retencao,comissaoPct,retOpCreditoPct,params.despop||0,params.lucro||0,comissaoFixa);
+        return { nome:entry.rows[idx].nome,frete,retencao,comissaoPct,comissaoFixa,comissaoR,retOpCreditoPct,retOpCreditoR,recLiquido,custo,resultadoLiqVenda,despOpR,sobra,resultadoPct,precoSugerido:preco };
       };
       const updateAll = () => entry.rows.forEach((_,idx) => {
         const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
@@ -1006,7 +1041,19 @@ function renderHistory(){
         for (const field of ['sobra','resultadoPct']) row.querySelector(`[data-edit-out="${field}"]`).className=r.sobra>=0?'pos':'neg';
       });
       table.querySelectorAll('[data-edit-field]').forEach(inp=>inp.addEventListener('input',updateAll));
-      paramInputs.forEach(inp=>inp.addEventListener('input',updateAll));
+      // Custo: atualiza com os descontos, exceto se o usuário informar um custo manual.
+      let custoManual = false;
+      table.querySelectorAll('[data-edit-field="custo"]').forEach(inp=>inp.addEventListener('input',()=>{custoManual=true;}));
+      const recalcularCusto = () => {
+        const product = state.products.find(p=>String(p.id)===String(entry.productId));
+        const base = Number(entry.valorBase ?? product?.valorBase);
+        if (!custoManual && Number.isFinite(base) && base > 0){
+          const custoNovo = valorCusto(base,getParams());
+          if (Number.isFinite(custoNovo)) table.querySelectorAll('[data-edit-field="custo"]').forEach(inp=>{inp.value=fmt(custoNovo);});
+        }
+        updateAll();
+      };
+      paramInputs.forEach(inp=>inp.addEventListener('input',recalcularCusto));
       valorInput.addEventListener('input',updateAll);
       updateAll();
       container.querySelector(`[data-edit-save="${entry.id}"]`).addEventListener('click',async()=>{
@@ -1014,11 +1061,13 @@ function renderHistory(){
         const params=getParams();
         const rows=entry.rows.map((_,idx)=>readRow(idx));
         const platformRates=Object.fromEntries(rows.map(r=>[r.nome,{comissao:r.comissaoPct,retOpCredito:r.retOpCreditoPct}]));
+        const product = state.products.find(p=>String(p.id)===String(entry.productId));
+        const valorBase = entry.valorBase ?? product?.valorBase ?? null;
         if (firebaseReady){
-          try{ await db.collection('simulacoes').doc(entry.id).update({valor,rows,params,platformRates}); }
+          try{ await db.collection('simulacoes').doc(entry.id).update({valor,rows,params,platformRates,valorBase}); }
           catch(e){ alert('Não foi possível salvar na nuvem. Confira sua conexão e tente novamente.'); return; }
         }
-        Object.assign(entry,{valor,rows,params,platformRates});
+        Object.assign(entry,{valor,rows,params,platformRates,valorBase});
         editingEntryId=null;renderHistory();
       });
       container.querySelector(`[data-edit-cancel="${entry.id}"]`).addEventListener('click',()=>{editingEntryId=null;renderHistory();});
@@ -1149,7 +1198,7 @@ document.getElementById('save-btn').addEventListener('click', async () => {
   const status = document.getElementById('save-status');
   const product = currentSimProduct();
   const valor = parseNumberInput(document.getElementById('sim-valor').value) || 0;
-  const hasSimulation = product && valor > 0 && !isNaN(valorCusto(product.valorBase));
+  const hasSimulation = product && valor > 0 && !isNaN(valorCusto(product.valorBase)) && state.platforms.some(pl => platformEnabled(product.id, pl.id));
 
   try{
     if (hasSimulation){
@@ -1160,6 +1209,10 @@ document.getElementById('save-btn').addEventListener('click', async () => {
           productDesc: entry.productDesc,
           valor: entry.valor,
           rows: entry.rows,
+          selectedPlatforms: entry.selectedPlatforms,
+          params: entry.params,
+          platformRates: entry.platformRates,
+          valorBase: entry.valorBase,
           savedAt: firebase.firestore.FieldValue.serverTimestamp(),
         });
         entry.id = docRef.id;
@@ -1169,6 +1222,10 @@ document.getElementById('save-btn').addEventListener('click', async () => {
     localStorage.setItem('calc-precos:state', JSON.stringify(state));
     status.textContent = firebaseReady ? 'Salvo na nuvem ✓' : 'Salvo ✓';
     setTimeout(() => status.textContent = '', 2500);
+    if (hasSimulation){
+      document.getElementById('sim-id').value = '';
+      document.getElementById('sim-valor').value = '';
+    }
     renderSimulation();
     if (document.getElementById('view-historico').style.display !== 'none') loadHistory();
   } catch(e){
