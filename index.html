@@ -577,28 +577,32 @@ function valorCusto(valorBase, params = state.params){
   return valorBase * pct - adicional;
 }
 
-function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct = 0, comissaoFixa = null){
-  const comissaoR = comissaoFixa == null ? (comissaoPct / 100) * valor : Number(comissaoFixa);
+// Retencao = tarifa de venda informada pelo marketplace (nao e custo adicional).
+// Quando ha retencao positiva, ela SUBSTITUI a comissao percentual padrao.
+function tarifaVenda(valor, retencao, comissaoPct){
+  const informada = Number(retencao);
+  return Number.isFinite(informada) && informada > 0 ? informada : Math.max(0, Number(valor) * Number(comissaoPct) / 100);
+}
+function calcRow(valor, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct = 0){
+  const comissaoR = tarifaVenda(valor, retencao, comissaoPct);
+  const comissaoEfetivaPct = valor > 0 ? comissaoR / valor * 100 : 0;
   const retOpCreditoR = (retOpCreditoPct / 100) * valor;
-  const recLiquido = valor - frete - retencao - retOpCreditoR - comissaoR;
+  const recLiquido = valor - frete - comissaoR - retOpCreditoR;
   const resultadoLiqVenda = recLiquido - custo;
   const despOpR = (despopPct / 100) * valor;
   const sobra = resultadoLiqVenda - despOpR;
   const resultadoPct = valor ? (sobra / valor) * 100 : NaN;
-  return { comissaoR, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct };
+  return { comissaoR, comissaoEfetivaPct, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct };
 }
-
-// Preço mínimo que cobre custo, frete, retenção, comissão, crédito,
-// despesas operacionais e a margem de lucro desejada sobre o preço de venda.
-function precoSugerido(custo, frete, retencao, comissaoPct, retOpCreditoPct, despopPct, lucroPct, comissaoFixa = null){
-  const taxas = [comissaoPct, retOpCreditoPct, despopPct, lucroPct].map(Number);
+// Tarifa informada em reais e tratada como custo fixo da simulacao.
+// Se nao informada, aplica-se a taxa percentual padrao da plataforma.
+function precoSugerido(custo, frete, retencao, comissaoPct, retOpCreditoPct, despopPct, lucroPct){
+  const tarifaFixa = Number(retencao) > 0 ? Number(retencao) : 0;
+  const taxas = [tarifaFixa > 0 ? 0 : comissaoPct, retOpCreditoPct, despopPct, lucroPct].map(Number);
+  const totalFixo = Number(custo) + Number(frete) + tarifaFixa;
   const denominador = 1 - taxas.reduce((a,b) => a + b, 0) / 100;
-  const totalFixo = Number(custo) + Number(frete) + Number(retencao) + (comissaoFixa == null ? 0 : Number(comissaoFixa));
-  if (comissaoFixa != null) taxas[0] = 0;
-  const denominadorCorrigido = 1 - taxas.reduce((a,b) => a + b, 0) / 100;
-  if (!Number.isFinite(totalFixo) || totalFixo < 0 || taxas.some(t => !Number.isFinite(t) || t < 0) || denominadorCorrigido <= 0) return NaN;
-  // Arredondar sempre para cima, evitando ficar abaixo da margem desejada.
-  return Math.ceil((totalFixo / denominadorCorrigido - 1e-9) * 100) / 100;
+  if (!Number.isFinite(totalFixo) || totalFixo < 0 || taxas.some(t => !Number.isFinite(t) || t < 0) || denominador <= 0) return NaN;
+  return Math.ceil((totalFixo / denominador - 1e-9) * 100) / 100;
 }
 
 function getOverride(productId, platformId){
@@ -739,17 +743,16 @@ function updateSimRow(product, platform, valor){
   const ov = getOverride(product.id, platform.id);
   const frete = ov.frete != null ? ov.frete : defaultFrete(platform, product);
   const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(platform, valor);
-  const comissaoFixa = ov.comissaoFixa == null ? null : ov.comissaoFixa;
-  const { comissaoR, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop, platform.comissao, comissaoFixa);
+  const { comissaoR, comissaoEfetivaPct, retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } = calcRow(valor, custo, frete, retencao, platform.retOpCredito, state.params.despop, platform.comissao);
   const cls = isNaN(sobra) ? '' : (sobra >= 0 ? 'pos' : 'neg');
 
   const row = document.getElementById(`sim-row-${platform.id}`);
   if (!row) return;
-  const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro, comissaoFixa);
+  const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro);
   const sugeridoCell = row.querySelector('[data-out=sugerido]');
   sugeridoCell.textContent = Number.isFinite(sugerido) ? `R$ ${fmt(sugerido)}` : 'Inviável';
   sugeridoCell.title = Number.isFinite(sugerido) ? `Preço mínimo para ${fmt(state.params.lucro)}% de lucro sobre a venda, com todas as taxas configuradas.` : 'Verifique custo e percentuais: a soma das taxas e da margem deve ser menor que 100%.';
-  row.querySelector('[data-out=comissao]').textContent = `R$ ${fmt(comissaoR)}`;
+  row.querySelector('[data-out=comissao]').textContent = `R$ ${fmt(comissaoR)} (${fmt(comissaoEfetivaPct)}%)`;
   row.querySelector('[data-out=retop]').textContent = `R$ ${fmt(retOpCreditoR)}`;
   row.querySelector('[data-out=recliq]').textContent = `R$ ${fmt(recLiquido)}`;
   row.querySelector('[data-out=custo]').textContent = `R$ ${fmt(custo)}`;
@@ -811,7 +814,7 @@ function renderSimulation(){
         <td class="desc-cell">${pl.nome}</td>
         <td data-label="Frete"><input class="num-input" data-row-field="frete" type="text" inputmode="decimal" value="${frete.toFixed(2).replace('.', ',')}"></td>
         <td data-label="Retenção"><input class="num-input" data-row-field="retencao" type="text" inputmode="decimal" value="${retencao.toFixed(2).replace('.', ',')}"></td>
-        <td data-label="Comissão"><input class="num-input" data-row-field="comissaoFixa" type="text" inputmode="decimal" placeholder="% padrão" title="Tarifa de venda em reais informada pelo marketplace. Deixe vazio para usar o percentual da plataforma." value="${ov.comissaoFixa == null ? '' : fmt(ov.comissaoFixa)}"><small style="display:block;color:#777">R$ tarifa; vazio = ${fmt(pl.comissao)}%</small></td>
+        <td data-label="Comissão" data-out="comissao" title="Calculada pela Retenção informada ou pelo percentual padrão da plataforma"></td>
         <td data-label="Ret. op. crédito" data-out="retop"></td>
         <td data-label="Rec. líquido" data-out="recliq"></td>
         <td data-label="Custo" data-out="custo"></td>
@@ -845,7 +848,7 @@ function renderSimulation(){
         <tbody>${rows}</tbody>
       </table>
     </div>
-    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">Para conferir com o Mercado Livre, informe a tarifa de venda exata em R$ na coluna Comissão e o custo de envio em Frete. A tarifa em reais substitui o percentual apenas nesta simulação. O preço sugerido é o mínimo calculado por plataforma para cobrir custo, comissão, taxa do cartão, frete, retenção e despesas operacionais, preservando a margem de lucro desejada sobre a venda. Ajuste frete e retenção conforme o anúncio real. Não inclui tributos ou tarifas fixas não informados.</p>
+    <p style="font-size:12px;color:var(--ink-soft);margin:10px 0 0;">Informe a tarifa de venda do marketplace na coluna Retenção e o envio em Frete. A Comissão é calculada automaticamente: com Retenção maior que zero, exibe a tarifa informada e seu percentual efetivo; com Retenção zerada, usa o percentual padrão da plataforma. A tarifa nunca é descontada duas vezes. O preço sugerido considera custo, tarifa, frete, crédito, despesas operacionais e margem desejada. Não inclui tributos ou tarifas fixas não informados.</p>
   `;
 
   container.querySelectorAll('[data-sim-platform]').forEach(inp => inp.addEventListener('change', () => {
@@ -858,7 +861,7 @@ function renderSimulation(){
       inp.addEventListener('input', () => {
         const field = inp.dataset.rowField;
         const val = parseNumberInput(inp.value);
-        setOverride(product.id, pl.id, field, inp.value.trim() === '' && field === 'comissaoFixa' ? null : (isNaN(val) ? 0 : val));
+        setOverride(product.id, pl.id, field, isNaN(val) ? 0 : val);
         updateSimRow(product, pl, parseNumberInput(document.getElementById('sim-valor').value) || 0);
       });
     });
@@ -937,8 +940,8 @@ function buildHistoryEntry(product, valor){
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valor);
     const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } =
-      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao, ov.comissaoFixa);
-    return { nome: pl.nome, frete, retencao, comissaoFixa: ov.comissaoFixa ?? null, retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro, ov.comissaoFixa) };
+      calcRow(valor, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao);
+    return { nome: pl.nome, frete, retencao, comissaoR: tarifaVenda(valor, retencao, pl.comissao), retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro) };
   });
   return {
     id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
@@ -1005,7 +1008,7 @@ function historyRate(entry, r){
 }
 function historySuggested(entry, r, params){
   const rates = historyRate(entry, r);
-  return precoSugerido(r.custo, r.frete, r.retencao, rates.comissao, rates.retOpCredito, params.despop || 0, params.lucro || 0, r.comissaoFixa ?? null);
+  return precoSugerido(r.custo, r.frete, r.retencao, rates.comissao, rates.retOpCredito, params.despop || 0, params.lucro || 0);
 }
 function renderHistory(){
   const container = document.getElementById('history-list');
@@ -1034,7 +1037,7 @@ function renderHistory(){
         return `<tr data-edit-row="${idx}"><td class="desc-cell">${r.nome}</td>
           <td><input class="num-input" data-edit-field="frete" value="${num(r.frete)}"></td>
           <td><input class="num-input" data-edit-field="retencao" value="${num(r.retencao)}"></td>
-          <td><input class="num-input" data-edit-field="comissaoPct" title="Percentual de comissão" value="${num(rate.comissao)}"><input class="num-input" data-edit-field="comissaoFixa" title="Tarifa real em R$ (vazio para percentual)" placeholder="R$ tarifa" value="${r.comissaoFixa == null ? '' : num(r.comissaoFixa)}"></td>
+          <td><input class="num-input" data-edit-field="comissaoPct" title="Percentual padrão, usado quando Retenção está zerada" value="${num(rate.comissao)}"><small data-edit-out="comissaoCalculada" style="display:block;color:#777"></small></td>
           <td><input class="num-input" data-edit-field="retOpCreditoPct" value="${num(rate.retOpCredito)}"></td>
           <td data-edit-out="recLiquido"></td>
           <td><input class="num-input" data-edit-field="custo" value="${num(r.custo)}"></td>
@@ -1044,7 +1047,7 @@ function renderHistory(){
       }).join('');
       return `<details class="history-entry" open><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">Editando…</span></summary>
         <div class="h-body"><div class="field-row" style="margin-bottom:16px"><div class="field"><label>Valor anunciado</label><div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${fmt(entry.valor)}"></div></div></div>
-        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="history-params-grid">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos recalculam o custo usando o valor base do produto, quando disponível. Para uma tarifa exata do marketplace, preencha R$ tarifa na coluna Comissão; deixe vazio para usar %.</small></div>
+        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="history-params-grid">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos recalculam o custo usando o valor base do produto, quando disponível. Informe a tarifa real do marketplace em Retenção; Comissão mostra automaticamente o valor e o percentual correspondente. Com Retenção zerada, usa-se o percentual padrão editável.</small></div>
         <div class="table-scroll"><table id="edit-table-${entry.id}"><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div>
         <div style="display:flex;gap:10px;margin-top:16px"><button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px">Salvar alterações</button><button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0">Cancelar</button></div></div></details>`;
     }
@@ -1052,7 +1055,7 @@ function renderHistory(){
       const cls = r.sobra >= 0 ? 'pos' : 'neg';
       const suggested = historySuggested(entry,r,params);
       const rates = historyRate(entry,r);
-      return `<tr><td class="desc-cell">${r.nome}</td><td>R$ ${fmt(r.frete)}</td><td>R$ ${fmt(r.retencao)}</td><td>${fmt(rates.comissao)}%</td><td>R$ ${fmt(r.retOpCreditoR)}</td><td>R$ ${fmt(r.recLiquido)}</td><td>R$ ${fmt(r.custo)}</td><td>R$ ${fmt(r.resultadoLiqVenda)}</td><td>R$ ${fmt(r.despOpR)}</td><td class="${cls}">R$ ${fmt(r.sobra)}</td><td class="${cls}">${fmt(r.resultadoPct)}%</td><td><strong>${Number.isFinite(suggested) ? 'R$ '+fmt(suggested) : '—'}</strong></td></tr>`;
+      return `<tr><td class="desc-cell">${r.nome}</td><td>R$ ${fmt(r.frete)}</td><td>R$ ${fmt(r.retencao)}</td><td>R$ ${fmt(tarifaVenda(entry.valor, r.retencao, rates.comissao))} (${fmt(entry.valor > 0 ? tarifaVenda(entry.valor, r.retencao, rates.comissao) / entry.valor * 100 : 0)}%)</td><td>R$ ${fmt(r.retOpCreditoR)}</td><td>R$ ${fmt(r.recLiquido)}</td><td>R$ ${fmt(r.custo)}</td><td>R$ ${fmt(r.resultadoLiqVenda)}</td><td>R$ ${fmt(r.despOpR)}</td><td class="${cls}">R$ ${fmt(r.sobra)}</td><td class="${cls}">${fmt(r.resultadoPct)}%</td><td><strong>${Number.isFinite(suggested) ? 'R$ '+fmt(suggested) : '—'}</strong></td></tr>`;
     }).join('');
     return `<details class="history-entry"><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</span><span class="h-actions"><button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button><button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button></span></summary><div class="h-body"><div class="table-scroll"><table><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div></details>`;
   }).join('');
@@ -1074,18 +1077,14 @@ function renderHistory(){
         const params = getParams();
         const frete=get('frete'),retencao=get('retencao'),custo=get('custo');
         const comissaoPct=get('comissaoPct'),retOpCreditoPct=get('retOpCreditoPct');
-        const tarifaInput = row.querySelector('[data-edit-field="comissaoFixa"]');
-        const comissaoFixa = tarifaInput.value.trim() === '' ? null : get('comissaoFixa');
-        const comissaoR=comissaoFixa == null ? valor*comissaoPct/100 : comissaoFixa,retOpCreditoR=valor*retOpCreditoPct/100;
-        const recLiquido=valor-frete-retencao-comissaoR-retOpCreditoR;
-        const resultadoLiqVenda=recLiquido-custo,despOpR=valor*(params.despop||0)/100;
-        const sobra=resultadoLiqVenda-despOpR,resultadoPct=valor?sobra/valor*100:NaN;
-        const preco=precoSugerido(custo,frete,retencao,comissaoPct,retOpCreditoPct,params.despop||0,params.lucro||0,comissaoFixa);
-        return { nome:entry.rows[idx].nome,frete,retencao,comissaoPct,comissaoFixa,comissaoR,retOpCreditoPct,retOpCreditoR,recLiquido,custo,resultadoLiqVenda,despOpR,sobra,resultadoPct,precoSugerido:preco };
+        const result=calcRow(valor,custo,frete,retencao,retOpCreditoPct,params.despop||0,comissaoPct);
+        const preco=precoSugerido(custo,frete,retencao,comissaoPct,retOpCreditoPct,params.despop||0,params.lucro||0);
+        return { nome:entry.rows[idx].nome,frete,retencao,comissaoPct,comissaoR:result.comissaoR,retOpCreditoPct,...result,custo,precoSugerido:preco };
       };
       const updateAll = () => entry.rows.forEach((_,idx) => {
         const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
         const r=readRow(idx);
+        row.querySelector('[data-edit-out="comissaoCalculada"]').textContent=`Tarifa: R$ ${fmt(r.comissaoR)} (${fmt(r.comissaoEfetivaPct)}%)`;
         for (const field of ['recLiquido','resultadoLiqVenda','despOpR','sobra']) row.querySelector(`[data-edit-out="${field}"]`).textContent=`R$ ${fmt(r[field])}`;
         row.querySelector('[data-edit-out="resultadoPct"]').textContent=`${fmt(r.resultadoPct)}%`;
         row.querySelector('[data-edit-out="precoSugerido"]').textContent=Number.isFinite(r.precoSugerido)?`R$ ${fmt(r.precoSugerido)}`:'—';
