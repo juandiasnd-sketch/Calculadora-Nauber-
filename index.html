@@ -306,6 +306,33 @@
     }
     #sim-result td input.num-input { width:120px; text-align:right; }
   }
+
+  .tabs{flex-wrap:wrap}.bi-intro,.bi-note{color:var(--ink-soft);font-size:13px;line-height:1.55}
+  .bi-filters{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:14px;margin:22px 0}
+  .bi-filters label{font-size:12px;color:var(--ink-soft);display:flex;flex-direction:column;gap:7px}
+  .bi-filters select{background:var(--field-bg);border:1px solid var(--line);border-radius:11px;padding:11px;color:var(--ink);width:100%;font:inherit;font-size:14px}
+  .bi-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:18px 0 24px}
+  .bi-kpi{background:#f4f8f5;border:1px solid #dce9df;border-radius:16px;padding:18px;min-width:0}
+  .bi-kpi span{display:block;color:var(--ink-soft);font-size:12px;margin-bottom:9px}.bi-kpi strong{font-size:clamp(18px,2vw,26px);overflow-wrap:anywhere}.bi-kpi small{display:block;color:var(--ink-soft);font-size:11px;margin-top:6px}
+  .bi-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+  .bi-panel{border:1px solid var(--line);border-radius:16px;padding:20px;min-width:0;background:#fff}
+  .bi-panel h3{margin:0 0 17px;font-size:16px}.bi-opportunities{margin-top:16px}
+  .bi-bar-row{width:100%;display:grid;grid-template-columns:minmax(85px,35%) 1fr auto;align-items:center;gap:12px;padding:8px 3px;border:0;background:transparent;text-align:left;cursor:pointer;color:var(--ink)}
+  .bi-bar-row:hover,.bi-product:hover{background:#f1f8f3}.bi-bar-label{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .bi-track{height:13px;background:#edf0ee;border-radius:20px;overflow:hidden}.bi-fill{display:block;height:100%;background:#16813d;border-radius:20px;min-width:2px}.bi-fill.negative{background:#d65a53}
+  .bi-bar-value{font-family:'IBM Plex Mono',monospace;font-size:12px;white-space:nowrap}
+  .bi-product{display:flex;justify-content:space-between;gap:10px;align-items:center;width:100%;padding:11px 6px;border:0;border-bottom:1px solid var(--line);background:transparent;cursor:pointer;text-align:left;color:var(--ink)}
+  .bi-product span{min-width:0;font-size:12px}.bi-product small{display:block;color:var(--ink-soft);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:300px}.bi-product strong{white-space:nowrap;font-size:12px}
+  .bi-empty{color:var(--ink-soft);font-size:13px;padding:22px 4px}
+  @media(max-width:850px){.bi-filters,.bi-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.bi-grid{grid-template-columns:1fr}}
+  @media(max-width:480px){.bi-filters,.bi-kpis{grid-template-columns:1fr 1fr}.bi-panel{padding:13px}.bi-bar-row{grid-template-columns:minmax(70px,32%) 1fr auto;gap:6px}}
+  .history-params-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;margin-top:12px;align-items:end}
+  .history-params-grid .field{min-width:0;display:flex;flex-direction:column;gap:8px;justify-content:flex-end}
+  .history-params-grid .field span{font-size:12px;line-height:1.35;min-height:34px;display:flex;align-items:end}
+  .history-params-grid input{box-sizing:border-box;width:100%!important;max-width:none!important;min-width:0;height:42px}
+  @media(max-width:1100px){.history-params-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+  @media(max-width:600px){.history-params-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 </style>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
@@ -323,6 +350,7 @@
   <nav class="tabs">
     <button class="tab-btn active" id="tab-calc" type="button">Calculadora</button>
     <button class="tab-btn" id="tab-history" type="button">Histórico de simulações</button>
+    <button class="tab-btn" id="tab-bi" type="button">Painel BI</button>
   </nav>
 
   <p id="sheet-sync-status" style="font-size:12.5px;color:var(--ink-soft);margin:-10px 0 20px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
@@ -426,6 +454,7 @@
           <option value="">Marca: todas</option>
           <option value="nauber">Nauber</option>
           <option value="fiat">Fiat</option>
+          <option value="verkort">Verkort</option>
         </select>
         <select id="history-filter-plataforma">
           <option value="">Plataforma: todas</option>
@@ -441,6 +470,30 @@
         <span id="history-count" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);"></span>
       </div>
       <div id="history-list"></div>
+    </div>
+  </div>
+
+  <div id="view-bi" style="display:none;">
+    <div class="card">
+      <h2>Painel BI — inteligência de precificação</h2>
+      <p class="bi-intro">Análises interativas baseadas nas simulações salvas. Selecione uma barra ou produto para abrir os históricos correspondentes.</p>
+      <div class="bi-filters">
+        <label>Marca<select id="bi-brand"><option value="">Todas as marcas</option><option value="nauber">Nauber</option><option value="fiat">Fiat</option><option value="verkort">Verkort</option></select></label>
+        <label>Plataforma<select id="bi-platform"><option value="">Todas as plataformas</option></select></label>
+        <label>Período<select id="bi-period"><option value="">Todo o período</option><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="365">Últimos 12 meses</option></select></label>
+        <label>Ordenar oportunidades<select id="bi-sort"><option value="gain">Maior ganho potencial</option><option value="margin">Maior margem</option><option value="price">Maior preço</option></select></label>
+      </div>
+      <div id="bi-kpis" class="bi-kpis"></div>
+      <div class="bi-grid">
+        <section class="bi-panel"><h3>Simulações por marca</h3><div id="bi-brand-chart"></div></section>
+        <section class="bi-panel"><h3>Margem média por plataforma</h3><div id="bi-platform-chart"></div></section>
+        <section class="bi-panel"><h3>Distribuição de resultados</h3><div id="bi-result-chart"></div></section>
+        <section class="bi-panel"><h3>Simulações por mês</h3><div id="bi-month-chart"></div></section>
+        <section class="bi-panel"><h3>Produtos mais caros</h3><div id="bi-expensive"></div></section>
+        <section class="bi-panel"><h3>Produtos mais baratos</h3><div id="bi-cheap"></div></section>
+      </div>
+      <section class="bi-panel bi-opportunities"><h3>Oportunidades de precificação</h3><p class="bi-note">Diferença entre preço anunciado e preço sugerido, com base nos custos registrados. Não é uma previsão de demanda nem de vendas.</p><div id="bi-opportunities"></div></section>
+      <p class="bi-note">Indicadores calculados sobre simulações e plataformas registradas, sem multiplicar por quantidades vendidas. Quando houver vários históricos do mesmo produto, a lista de oportunidades utiliza a simulação mais recente por produto e plataforma.</p>
     </div>
   </div>
 
@@ -925,9 +978,7 @@ function getFilteredHistory(){
       if (!haystack.includes(query)) return false;
     }
     if (marcaFilter){
-      const isFiat = /F$/i.test(String(entry.productId));
-      if (marcaFilter === 'fiat' && !isFiat) return false;
-      if (marcaFilter === 'nauber' && isFiat) return false;
+      if (getEntryBrand(entry) !== marcaFilter) return false;
     }
     if (platformFilter || resultFilter){
       const rows = platformFilter ? entry.rows.filter(r => r.nome === platformFilter) : entry.rows;
@@ -976,7 +1027,7 @@ function renderHistory(){
         ['classe','Desconto classe'], ['comissao','Desconto comissão'], ['du','Desconto à vista'],
         ['adicional','Desconto adicional (R$)'], ['despop','Despesa operacional (%)'], ['lucro','Lucro desejado sobre a venda (%)']
       ];
-      const paramHtml = fields.map(([key,label]) => `<label class="field" style="min-width:145px;flex:1"><span>${label}</span><input class="num-input" style="width:100%;max-width:190px" inputmode="decimal" data-edit-param="${key}" value="${params[key] == null ? '' : String(params[key]).replace('.', ',')}"></label>`).join('');
+      const paramHtml = fields.map(([key,label]) => `<label class="field" ><span>${label}</span><input class="num-input"  inputmode="decimal" data-edit-param="${key}" value="${params[key] == null ? '' : String(params[key]).replace('.', ',')}"></label>`).join('');
       const rowsHtml = entry.rows.map((r,idx) => {
         const rate = historyRate(entry,r);
         const num = v => fmt(Number(v)||0);
@@ -993,7 +1044,7 @@ function renderHistory(){
       }).join('');
       return `<details class="history-entry" open><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">Editando…</span></summary>
         <div class="h-body"><div class="field-row" style="margin-bottom:16px"><div class="field"><label>Valor anunciado</label><div><span class="unit">R$</span><input type="text" inputmode="decimal" id="edit-valor-${entry.id}" value="${fmt(entry.valor)}"></div></div></div>
-        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="field-row" style="display:flex;flex-wrap:wrap;gap:12px;margin-top:12px">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos recalculam o custo usando o valor base do produto, quando disponível. Para uma tarifa exata do marketplace, preencha R$ tarifa na coluna Comissão; deixe vazio para usar %.</small></div>
+        <div style="margin:12px 0 18px"><strong>Parametrização desta simulação</strong><div class="history-params-grid">${paramHtml}</div><small>Alterações feitas aqui valem somente para este histórico. Os descontos recalculam o custo usando o valor base do produto, quando disponível. Para uma tarifa exata do marketplace, preencha R$ tarifa na coluna Comissão; deixe vazio para usar %.</small></div>
         <div class="table-scroll"><table id="edit-table-${entry.id}"><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div>
         <div style="display:flex;gap:10px;margin-top:16px"><button class="save-btn" data-edit-save="${entry.id}" type="button" style="padding:9px 20px;font-size:14px">Salvar alterações</button><button class="add-btn" data-edit-cancel="${entry.id}" type="button" style="margin-top:0">Cancelar</button></div></div></details>`;
     }
@@ -1083,9 +1134,97 @@ function renderHistory(){
   }));
 }
 
+
+// BI: utiliza apenas dados efetivamente registrados no histórico; não estima demanda.
+function getEntryBrand(entry){
+  const text=String(entry.productDesc||'').toUpperCase();
+  const id=String(entry.productId||'').toUpperCase();
+  const product=state.products.find(p=>String(p.id).toUpperCase()===id);
+  const detail=(text+' '+String(product?.descricao||product?.desc||product?.nome||'')).toUpperCase();
+  if (/\bVERKORT\b/.test(detail)) return 'verkort';
+  if (/\bFIAT\b/.test(detail)) return 'fiat';
+  if (/\bNAUBER\b/.test(detail)) return 'nauber';
+  if (/F$/.test(id)) return 'fiat';
+  return 'nauber';
+}
+function biHistoryOpen(productId,platform,brand){
+  document.getElementById('tab-history').click();
+  document.getElementById('history-search-input').value=productId||'';
+  document.getElementById('history-filter-marca').value=brand||'';
+  document.getElementById('history-filter-plataforma').value=platform||'';
+  document.getElementById('history-filter-resultado').value='';
+  renderHistory();
+  document.getElementById('view-historico').scrollIntoView({behavior:'smooth',block:'start'});
+}
+function biMoney(n){return 'R$ '+fmt(n)}
+function biEsc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function biBars(id,items,maxValue,format,callback){
+  const node=document.getElementById(id);
+  if(!items.length){node.innerHTML='<div class="bi-empty">Sem dados para os filtros selecionados.</div>';return;}
+  node.innerHTML=items.map((item,i)=>`<button class="bi-bar-row" type="button" data-bi-index="${i}" title="Clique para filtrar o histórico"><span class="bi-bar-label">${biEsc(item.label)}</span><span class="bi-track"><span class="bi-fill ${item.value<0?'negative':''}" style="width:${Math.max(0,Math.min(100,Math.abs(item.value)/(maxValue||1)*100))}%"></span></span><strong class="bi-bar-value">${format(item.value)}</strong></button>`).join('');
+  node.querySelectorAll('[data-bi-index]').forEach(b=>b.addEventListener('click',()=>callback(items[Number(b.dataset.biIndex)])));
+}
+function biProducts(id,items,value,callback){
+  const node=document.getElementById(id);
+  if(!items.length){node.innerHTML='<div class="bi-empty">Sem produtos neste recorte.</div>';return;}
+  node.innerHTML=items.map((r,i)=>`<button class="bi-product" type="button" data-bi-index="${i}"><span><b>${biEsc(r.entry.productId)}</b><small>${biEsc(r.entry.productDesc||'Sem descrição')} · ${biEsc(r.row.nome)}</small></span><strong>${value(r)}</strong></button>`).join('');
+  node.querySelectorAll('[data-bi-index]').forEach(b=>b.addEventListener('click',()=>callback(items[Number(b.dataset.biIndex)])));
+}
+function renderBI(){
+  const brand=document.getElementById('bi-brand').value, platform=document.getElementById('bi-platform').value;
+  const days=Number(document.getElementById('bi-period').value)||0;
+  const threshold=days?Date.now()-days*86400000:0;
+  const entries=state.history.filter(e=>(!brand||getEntryBrand(e)===brand)&&(!threshold||new Date(e.savedAt).getTime()>=threshold)&&(!platform||(e.rows||[]).some(r=>r.nome===platform)));
+  const records=entries.flatMap(entry=>(entry.rows||[]).filter(row=>!platform||row.nome===platform).map(row=>({entry,row,brand:getEntryBrand(entry),margin:Number(row.resultadoPct)||0,price:Number(entry.valor)||0,profit:Number(row.sobra)||0})));
+  const unique=new Map();
+  [...records].sort((a,b)=>new Date(b.entry.savedAt)-new Date(a.entry.savedAt)).forEach(r=>{const key=r.entry.productId+'|'+r.row.nome;if(!unique.has(key))unique.set(key,r)});
+  const latest=[...unique.values()];
+  const avg=records.length?records.reduce((n,r)=>n+r.margin,0)/records.length:0;
+  const neg=records.filter(r=>r.profit<0).length;
+  const total=records.length;
+  const kpis=[['Simulações',entries.length,'Registros do histórico'],['Produtos únicos',new Set(entries.map(e=>String(e.productId))).size,'Códigos distintos'],['Margem média',fmt(avg)+'%','Média simples por plataforma'],['Resultados negativos',neg+' / '+total,'Simulações por plataforma']];
+  document.getElementById('bi-kpis').innerHTML=kpis.map(k=>`<div class="bi-kpi"><span>${k[0]}</span><strong>${k[1]}</strong><small>${k[2]}</small></div>`).join('');
+  const brands=[['nauber','Nauber'],['fiat','Fiat'],['verkort','Verkort']].map(([key,label])=>({key,label,value:entries.filter(e=>getEntryBrand(e)===key).length}));
+  biBars('bi-brand-chart',brands,Math.max(1,...brands.map(x=>x.value)),v=>String(v),r=>{document.getElementById('bi-brand').value=r.key;renderBI()});
+  const platforms=[...new Set(records.map(r=>r.row.nome))].map(label=>{const rs=records.filter(r=>r.row.nome===label);return {label,value:rs.reduce((n,r)=>n+r.margin,0)/rs.length}}).sort((a,b)=>b.value-a.value);
+  biBars('bi-platform-chart',platforms,Math.max(1,...platforms.map(x=>Math.abs(x.value))),v=>fmt(v)+'%',r=>{document.getElementById('bi-platform').value=r.label;renderBI()});
+  const results=[{label:'Positivo',value:total-neg,key:'pos'},{label:'Negativo',value:neg,key:'neg'}];
+  biBars('bi-result-chart',results,Math.max(1,total),v=>String(v),r=>{biHistoryOpen('',platform,brand);document.getElementById('history-filter-resultado').value=r.key;renderHistory()});
+  const monthMap=new Map();entries.forEach(e=>{const date=new Date(e.savedAt);if(Number.isNaN(date.getTime()))return;const key=date.toISOString().slice(0,7);monthMap.set(key,(monthMap.get(key)||0)+1)});
+  const months=[...monthMap].sort((a,b)=>a[0].localeCompare(b[0])).slice(-12).map(([key,value])=>({label:key.slice(5)+'/'+key.slice(0,4),value}));
+  biBars('bi-month-chart',months,Math.max(1,...months.map(x=>x.value)),v=>String(v),()=>biHistoryOpen('',platform,brand));
+  const uniqueProducts=new Map();[...latest].sort((a,b)=>new Date(b.entry.savedAt)-new Date(a.entry.savedAt)).forEach(r=>{if(!uniqueProducts.has(r.entry.productId))uniqueProducts.set(r.entry.productId,r)});
+  const products=[...uniqueProducts.values()];
+  biProducts('bi-expensive',[...products].sort((a,b)=>b.price-a.price).slice(0,8),r=>biMoney(r.price),r=>biHistoryOpen(r.entry.productId,r.row.nome,''));
+  biProducts('bi-cheap',[...products].sort((a,b)=>a.price-b.price).slice(0,8),r=>biMoney(r.price),r=>biHistoryOpen(r.entry.productId,r.row.nome,''));
+  const opportunities=latest.map(r=>{const suggested=historySuggested(r.entry,r.row,historyParams(r.entry));return {...r,suggested,gain:Number.isFinite(suggested)?suggested-r.price:NaN}}).filter(r=>Number.isFinite(r.gain));
+  const sort=document.getElementById('bi-sort').value;
+  opportunities.sort((a,b)=>sort==='margin'?b.margin-a.margin:sort==='price'?b.price-a.price:b.gain-a.gain);
+  biProducts('bi-opportunities',opportunities.slice(0,15),r=>`${r.gain>0?'+':''}${biMoney(r.gain)} · sugerido ${biMoney(r.suggested)}`,r=>biHistoryOpen(r.entry.productId,r.row.nome,''));
+}
+function biRefreshPlatformOptions(){
+  const sel=document.getElementById('bi-platform'),previous=sel.value;
+  const names=[...new Set(state.history.flatMap(e=>(e.rows||[]).map(r=>r.nome)))].sort();
+  sel.innerHTML='<option value="">Todas as plataformas</option>'+names.map(n=>`<option value="${biEsc(n)}">${biEsc(n)}</option>`).join('');
+  if(names.includes(previous))sel.value=previous;
+}
+document.getElementById('tab-bi').addEventListener('click',()=>{
+  ['calc','history'].forEach(id=>document.getElementById('tab-'+id).classList.remove('active'));
+  document.getElementById('tab-bi').classList.add('active');
+  document.getElementById('view-calculadora').style.display='none';
+  document.getElementById('view-historico').style.display='none';
+  document.getElementById('view-bi').style.display='';
+  biRefreshPlatformOptions();renderBI();
+  // Atualiza os indicadores após o carregamento remoto do histórico.
+  if(firebaseReady)loadHistory().then(()=>{if(document.getElementById('tab-bi').classList.contains('active')){biRefreshPlatformOptions();renderBI()}}).catch(()=>{});
+});
+['bi-brand','bi-platform','bi-period','bi-sort'].forEach(id=>document.getElementById(id).addEventListener('change',renderBI));
+
 document.getElementById('tab-calc').addEventListener('click', () => {
   document.getElementById('tab-calc').classList.add('active');
   document.getElementById('tab-history').classList.remove('active');
+  document.getElementById('tab-bi').classList.remove('active');
+  document.getElementById('view-bi').style.display = 'none';
   document.getElementById('view-calculadora').style.display = '';
   document.getElementById('view-historico').style.display = 'none';
 });
@@ -1100,6 +1239,8 @@ function renderHistoryPlatformFilterOptions(){
 document.getElementById('tab-history').addEventListener('click', () => {
   document.getElementById('tab-history').classList.add('active');
   document.getElementById('tab-calc').classList.remove('active');
+  document.getElementById('tab-bi').classList.remove('active');
+  document.getElementById('view-bi').style.display = 'none';
   document.getElementById('view-calculadora').style.display = 'none';
   document.getElementById('view-historico').style.display = '';
   document.getElementById('history-sync-status').textContent = firebaseReady
@@ -1125,7 +1266,7 @@ function generatePdfReport(){
 
   const filterLabels = [];
   if (filters.query) filterLabels.push(`busca "${filters.query}"`);
-  if (filters.marca) filterLabels.push(`marca: ${filters.marca === 'fiat' ? 'Fiat' : 'Nauber'}`);
+  if (filters.marca) filterLabels.push(`marca: ${{fiat:'Fiat',nauber:'Nauber',verkort:'Verkort'}[filters.marca] || filters.marca}`);
   if (filters.plataforma) filterLabels.push(`plataforma: ${filters.plataforma}`);
   if (filters.resultado) filterLabels.push(`resultado: ${filters.resultado === 'pos' ? 'positivo' : 'negativo'}`);
   const filterSummary = filterLabels.length ? filterLabels.join(' · ') : 'sem filtros (todas as simulações)';
