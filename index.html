@@ -465,6 +465,12 @@
           <option value="neg">Negativo (vermelho)</option>
         </select>
       </div>
+      <div class="history-filters" style="margin-bottom:14px;align-items:end">
+        <label>Registros<select id="history-filter-editados"><option value="">Todos</option><option value="sim">Somente editados</option><option value="nao">Nunca editados</option></select></label>
+        <label>Editados a partir de<input id="history-editado-de" type="datetime-local" style="padding:9px;border:1px solid #ddd;border-radius:7px"></label>
+        <label>Editados até<input id="history-editado-ate" type="datetime-local" style="padding:9px;border:1px solid #ddd;border-radius:7px"></label>
+        <button class="add-btn" id="history-edit-clear" type="button" style="margin:0">Limpar datas</button>
+      </div>
       <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:18px;">
         <button class="add-btn" id="generate-pdf-btn" type="button" style="margin:0;">Gerar PDF do que está filtrado</button>
         <span id="history-count" style="font-family:'IBM Plex Mono',monospace;font-size:13px;color:var(--ink-soft);"></span>
@@ -480,10 +486,12 @@
       <div class="bi-filters">
         <label>Marca<select id="bi-brand"><option value="">Todas as marcas</option><option value="nauber">Nauber</option><option value="fiat">Fiat</option><option value="verkort">Verkort</option></select></label>
         <label>Plataforma<select id="bi-platform"><option value="">Todas as plataformas</option></select></label>
+        <label>Edições<select id="bi-edited"><option value="">Todos os registros</option><option value="sim">Somente editados</option><option value="nao">Nunca editados</option></select></label>
         <label>Período<select id="bi-period"><option value="">Todo o período</option><option value="30">Últimos 30 dias</option><option value="90">Últimos 90 dias</option><option value="365">Últimos 12 meses</option></select></label>
         <label>Ordenar oportunidades<select id="bi-sort"><option value="gain">Maior ganho potencial</option><option value="margin">Maior margem</option><option value="price">Maior preço</option></select></label>
       </div>
       <div id="bi-kpis" class="bi-kpis"></div>
+      <section class="bi-panel" style="margin:18px 0"><h3>✎ Acompanhamento de edições</h3><p class="bi-note">Última alteração registrada por simulação; datas e horários locais. Clique para localizar o produto no histórico.</p><div id="bi-edits-list"></div></section>
       <div class="bi-grid">
         <section class="bi-panel"><h3>Simulações por marca</h3><div id="bi-brand-chart"></div></section>
         <section class="bi-panel"><h3>Margem média por plataforma</h3><div id="bi-platform-chart"></div></section>
@@ -738,12 +746,28 @@ function currentSimProduct(){
   return state.products.find(p => String(p.id) === idVal) || null;
 }
 
+// Calcula o preco a partir da margem RES% desejada, respeitando as mesmas taxas do calcRow.
+function precoPorResultadoPct(margem, custo, frete, retencao, retOpCreditoPct, despopPct, comissaoPct){
+  const fixa = Number(retencao) > 0 ? Number(retencao) : 0;
+  const taxaComissao = fixa ? 0 : Number(comissaoPct);
+  const denominador = 1 - (Number(margem) + taxaComissao + Number(retOpCreditoPct) + Number(despopPct)) / 100;
+  const totalFixo = Number(custo) + Number(frete) + fixa;
+  if (![margem,custo,frete,retencao,retOpCreditoPct,despopPct,comissaoPct].every(v=>Number.isFinite(Number(v))) || denominador <= 0 || totalFixo < 0) return NaN;
+  return Math.ceil((totalFixo / denominador - 1e-9)*100)/100;
+}
+function precoParaMargemSim(product, platform, margem){
+  const ov=getOverride(product.id,platform.id);
+  const frete=ov.frete!=null?ov.frete:defaultFrete(platform,product);
+  const retencao=ov.retencao!=null?ov.retencao:0;
+  return precoPorResultadoPct(margem,custoSimulacao(product),frete,retencao,platform.retOpCredito,state.params.despop,platform.comissao);
+}
 function valorPlataforma(productId, platformId, valorPrincipal){
   const personalizado = getOverride(productId, platformId).valorAnunciado;
   return personalizado != null && Number.isFinite(Number(personalizado)) ? Number(personalizado) : valorPrincipal;
 }
 function updateSimRow(product, platform, valorPrincipal){
-  const valor = valorPlataforma(product.id, platform.id, valorPrincipal);
+  const margemManual=getOverride(product.id,platform.id).margemAlvo;
+  const valor = margemManual!=null ? precoParaMargemSim(product,platform,Number(margemManual)) : valorPlataforma(product.id, platform.id, valorPrincipal);
   const custo = custoSimulacao(product);
   const ov = getOverride(product.id, platform.id);
   const frete = ov.frete != null ? ov.frete : defaultFrete(platform, product);
@@ -754,7 +778,7 @@ function updateSimRow(product, platform, valorPrincipal){
   const row = document.getElementById(`sim-row-${platform.id}`);
   if (!row) return;
   const valorInput = row.querySelector('[data-row-field=valorAnunciado]');
-  if (valorInput && document.activeElement !== valorInput) valorInput.value = fmt(valor);
+  if (valorInput && document.activeElement !== valorInput) valorInput.value = Number.isFinite(valor)?fmt(valor):'';
   const sugerido = precoSugerido(custo, frete, retencao, platform.comissao, platform.retOpCredito, state.params.despop, state.params.lucro);
   const sugeridoCell = row.querySelector('[data-out=sugerido]');
   sugeridoCell.textContent = Number.isFinite(sugerido) ? `R$ ${fmt(sugerido)}` : 'Inviável';
@@ -770,7 +794,8 @@ function updateSimRow(product, platform, valorPrincipal){
   sobraCell.textContent = `R$ ${fmt(sobra)}`;
   sobraCell.className = cls;
   const pctCell = row.querySelector('[data-out=pct]');
-  pctCell.textContent = `${fmt(resultadoPct)}%`;
+  const pctInput=pctCell.querySelector('[data-row-field="margemAlvo"]');
+  if(pctInput && document.activeElement!==pctInput) pctInput.value=Number.isFinite(resultadoPct)?fmt(resultadoPct):'';
   pctCell.className = cls;
 }
 
@@ -826,7 +851,8 @@ function renderSimulation(){
   state.platforms.filter(pl => platformEnabled(product.id, pl.id)).forEach(pl => {
     const ov = getOverride(product.id, pl.id);
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
-    const valorLinha = valorPlataforma(product.id, pl.id, valor);
+    const margemManual=ov.margemAlvo;
+    const valorLinha = margemManual!=null ? precoParaMargemSim(product,pl,Number(margemManual)) : valorPlataforma(product.id, pl.id, valor);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valorLinha);
     rows += `
       <tr id="sim-row-${pl.id}">
@@ -841,7 +867,7 @@ function renderSimulation(){
         <td data-label="Resultado líq. venda" data-out="resultliq"></td>
         <td data-label="Desp. operacional" data-out="despop"></td>
         <td data-label="Sobra" data-out="sobra"></td>
-        <td data-label="Res %" data-out="pct"></td>
+        <td data-label="Res %" data-out="pct"><input class="num-input" style="min-width:92px;width:92px;border:1px solid #2f855a;background:#f0faf3" data-row-field="margemAlvo" type="text" inputmode="decimal" title="Digite a margem desejada para calcular o valor anunciado desta plataforma" aria-label="RES percentual de ${pl.nome}" value=""></td>
         <td data-label="Preço sugerido" data-out="sugerido" style="font-weight:700;color:var(--pos);background:#eaf6ed;border-radius:8px;"></td>
       </tr>`;
   });
@@ -900,7 +926,20 @@ function renderSimulation(){
     row.querySelectorAll('[data-row-field]').forEach(inp => {
       inp.addEventListener('input', () => {
         const field = inp.dataset.rowField;
+        if (field === 'margemAlvo') {
+          const margem=parseNumberInput(inp.value);
+          if(!Number.isFinite(margem)){return;}
+          const preco=precoParaMargemSim(product,pl,margem);
+          if(!Number.isFinite(preco)||preco<=0){inp.setCustomValidity('Margem inviável para os custos e taxas informados.');inp.reportValidity();return;}
+          inp.setCustomValidity('');
+          setOverride(product.id,pl.id,'margemAlvo',margem);
+          setOverride(product.id,pl.id,'valorAnunciado',null);
+          try{localStorage.setItem('calc-precos:state',JSON.stringify(state));}catch(e){}
+          updateSimRow(product,pl,parseNumberInput(document.getElementById('sim-valor').value)||0);
+          return;
+        }
         if (field === 'valorAnunciado') {
+          setOverride(product.id,pl.id,'margemAlvo',null);
           const texto = inp.value.trim();
           const personalizado = parseNumberInput(texto);
           setOverride(product.id, pl.id, field, texto === '' || !Number.isFinite(personalizado) || personalizado < 0 ? null : personalizado);
@@ -995,11 +1034,11 @@ function buildHistoryEntry(product, valor){
   const rows = state.platforms.filter(pl => platformEnabled(product.id, pl.id)).map(pl => {
     const ov = getOverride(product.id, pl.id);
     const frete = ov.frete != null ? ov.frete : defaultFrete(pl, product);
-    const valorLinha = valorPlataforma(product.id, pl.id, valor);
+    const valorLinha = ov.margemAlvo!=null ? precoParaMargemSim(product,pl,Number(ov.margemAlvo)) : valorPlataforma(product.id, pl.id, valor);
     const retencao = ov.retencao != null ? ov.retencao : defaultRetencao(pl, valorLinha);
     const { retOpCreditoR, recLiquido, resultadoLiqVenda, despOpR, sobra, resultadoPct } =
       calcRow(valorLinha, custo, frete, retencao, pl.retOpCredito, state.params.despop, pl.comissao);
-    return { nome: pl.nome, valorAnunciado: valorLinha, frete, retencao, comissaoR: tarifaVenda(valorLinha, retencao, pl.comissao), retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro) };
+    return { nome: pl.nome, margemAlvo: ov.margemAlvo ?? null, valorAnunciado: valorLinha, frete, retencao, comissaoR: tarifaVenda(valorLinha, retencao, pl.comissao), retOpCreditoR, recLiquido, custo, resultadoLiqVenda, despOpR, sobra, resultadoPct, precoSugerido: precoSugerido(custo, frete, retencao, pl.comissao, pl.retOpCredito, state.params.despop, state.params.lucro) };
   });
   return {
     id: Date.now() + '-' + Math.random().toString(36).slice(2, 7),
@@ -1028,12 +1067,24 @@ function getActiveHistoryFilters(){
     marca: document.getElementById('history-filter-marca').value,
     plataforma: document.getElementById('history-filter-plataforma').value,
     resultado: document.getElementById('history-filter-resultado').value,
+    editados: document.getElementById('history-filter-editados').value,
+    editadoDe: document.getElementById('history-editado-de').value,
+    editadoAte: document.getElementById('history-editado-ate').value,
   };
 }
 
 function getFilteredHistory(){
-  const { query, marca: marcaFilter, plataforma: platformFilter, resultado: resultFilter } = getActiveHistoryFilters();
+  const { query, marca: marcaFilter, plataforma: platformFilter, resultado: resultFilter, editados, editadoDe, editadoAte } = getActiveHistoryFilters();
   return state.history.filter(entry => {
+    if(editados==='sim'&&!entry.editedAt)return false;
+    if(editados==='nao'&&entry.editedAt)return false;
+    if(editadoDe||editadoAte){
+      if(!entry.editedAt)return false;
+      const t=new Date(entry.editedAt).getTime();
+      if(!Number.isFinite(t))return false;
+      if(editadoDe&&t<new Date(editadoDe).getTime())return false;
+      if(editadoAte&&t>new Date(editadoAte).getTime())return false;
+    }
     if (query){
       const haystack = stripAccents(`${entry.productId} ${entry.productDesc || ''}`.toLowerCase());
       if (!haystack.includes(query)) return false;
@@ -1101,7 +1152,7 @@ function renderHistory(){
           <td data-edit-out="recLiquido"></td>
           <td><input class="num-input" data-edit-field="custo" value="${num(r.custo)}"></td>
           <td data-edit-out="resultadoLiqVenda"></td><td data-edit-out="despOpR"></td>
-          <td data-edit-out="sobra"></td><td data-edit-out="resultadoPct"></td>
+          <td data-edit-out="sobra"></td><td><input class="num-input" style="min-width:92px;width:92px;border:1px solid #2f855a;background:#f0faf3" data-edit-field="margemAlvo" value="${num(r.resultadoPct)}" title="Editar RES% recalcula o valor anunciado"></td>
           <td data-edit-out="precoSugerido"></td></tr>`;
       }).join('');
       return `<details class="history-entry" open><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">Editando…</span></summary>
@@ -1116,7 +1167,7 @@ function renderHistory(){
       const rates = historyRate(entry,r);
       return `<tr><td class="desc-cell">${r.nome}</td><td>R$ ${fmt(r.valorAnunciado ?? entry.valor)}</td><td>R$ ${fmt(r.frete)}</td><td>R$ ${fmt(r.retencao)}</td><td>R$ ${fmt(tarifaVenda(r.valorAnunciado ?? entry.valor, r.retencao, rates.comissao))} (${fmt((r.valorAnunciado ?? entry.valor) > 0 ? tarifaVenda(r.valorAnunciado ?? entry.valor, r.retencao, rates.comissao) / (r.valorAnunciado ?? entry.valor) * 100 : 0)}%)</td><td>R$ ${fmt(r.retOpCreditoR)}</td><td>R$ ${fmt(r.recLiquido)}</td><td>R$ ${fmt(r.custo)}</td><td>R$ ${fmt(r.resultadoLiqVenda)}</td><td>R$ ${fmt(r.despOpR)}</td><td class="${cls}">R$ ${fmt(r.sobra)}</td><td class="${cls}">${fmt(r.resultadoPct)}%</td><td><strong>${Number.isFinite(suggested) ? 'R$ '+fmt(suggested) : '—'}</strong></td></tr>`;
     }).join('');
-    return `<details class="history-entry"><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</span><span class="h-actions"><button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button><button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button></span></summary><div class="h-body"><div class="table-scroll"><table><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div></details>`;
+    return `<details class="history-entry"><summary><span class="h-main">${entry.productId} — ${entry.productDesc || '(sem descrição)'}</span><span class="h-meta">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}${entry.editedAt ? ` · ✎ Editado em ${formatDateTime(entry.editedAt)}` : ''}</span><span class="h-actions"><button class="icon-btn" data-history-edit="${entry.id}" title="Editar" type="button">✎</button><button class="icon-btn" data-history-delete="${entry.id}" title="Excluir" type="button">🗑</button></span></summary><div class="h-body"><div class="table-scroll"><table><thead><tr>${cols}</tr></thead><tbody>${rowsHtml}</tbody></table></div></div></details>`;
   }).join('');
   if (editingEntryId){
     const entry = state.history.find(e => e.id === editingEntryId);
@@ -1128,6 +1179,18 @@ function renderHistory(){
         const params = historyParams(entry);
         paramInputs.forEach(inp => { const value = parseNumberInput(inp.value); params[inp.dataset.editParam] = inp.value.trim() === '' && inp.dataset.editParam === 'classe' ? null : (Number.isFinite(value) ? value : 0); });
         return params;
+      };
+      const atualizarMargemEditada=(inp)=>{
+        const row=inp.closest('tr');
+        const margem=parseNumberInput(inp.value);
+        if(!Number.isFinite(margem))return;
+        const get=f=>parseNumberInput(row.querySelector(`[data-edit-field="${f}"]`).value)||0;
+        const params=getParams();
+        const preco=precoPorResultadoPct(margem,get('custo'),get('frete'),get('retencao'),get('retOpCreditoPct'),params.despop||0,get('comissaoPct'));
+        if(!Number.isFinite(preco)||preco<=0){inp.setCustomValidity('Margem inviável.');inp.reportValidity();return;}
+        inp.setCustomValidity('');
+        row.querySelector('[data-edit-field="valorAnunciado"]').value=fmt(preco);
+        updateAll();
       };
       const readRow = (idx) => {
         const row = table.querySelector(`tr[data-edit-row="${idx}"]`);
@@ -1145,11 +1208,15 @@ function renderHistory(){
         const r=readRow(idx);
         row.querySelector('[data-edit-out="comissaoCalculada"]').textContent=`Tarifa: R$ ${fmt(r.comissaoR)} (${fmt(r.comissaoEfetivaPct)}%)`;
         for (const field of ['recLiquido','resultadoLiqVenda','despOpR','sobra']) row.querySelector(`[data-edit-out="${field}"]`).textContent=`R$ ${fmt(r[field])}`;
-        row.querySelector('[data-edit-out="resultadoPct"]').textContent=`${fmt(r.resultadoPct)}%`;
+        const margemInput=row.querySelector('[data-edit-field="margemAlvo"]');
+        if(margemInput&&document.activeElement!==margemInput)margemInput.value=fmt(r.resultadoPct);
         row.querySelector('[data-edit-out="precoSugerido"]').textContent=Number.isFinite(r.precoSugerido)?`R$ ${fmt(r.precoSugerido)}`:'—';
-        for (const field of ['sobra','resultadoPct']) row.querySelector(`[data-edit-out="${field}"]`).className=r.sobra>=0?'pos':'neg';
+        row.querySelector('[data-edit-out="sobra"]').className=r.sobra>=0?'pos':'neg';
       });
-      table.querySelectorAll('[data-edit-field]').forEach(inp=>inp.addEventListener('input',updateAll));
+      table.querySelectorAll('[data-edit-field]').forEach(inp=>inp.addEventListener('input',()=>{
+        if(inp.dataset.editField==='margemAlvo') atualizarMargemEditada(inp);
+        else {if(inp.dataset.editField==='valorAnunciado'){const margemInput=inp.closest('tr').querySelector('[data-edit-field="margemAlvo"]');if(margemInput)margemInput.dataset.manual='';}updateAll();}
+      }));
       // Custo: atualiza com os descontos, exceto se o usuário informar um custo manual.
       let custoManual = false;
       table.querySelectorAll('[data-edit-field="custo"]').forEach(inp=>inp.addEventListener('input',()=>{custoManual=true;}));
@@ -1177,11 +1244,14 @@ function renderHistory(){
         const platformRates=Object.fromEntries(rows.map(r=>[r.nome,{comissao:r.comissaoPct,retOpCredito:r.retOpCreditoPct}]));
         const product = state.products.find(p=>String(p.id)===String(entry.productId));
         const valorBase = entry.valorBase ?? product?.valorBase ?? null;
+        const editedAt=new Date().toISOString();
+        const editCount=(Number(entry.editCount)||0)+1;
         if (firebaseReady){
-          try{ await db.collection('simulacoes').doc(entry.id).update({valor,rows,params,platformRates,valorBase}); }
+          try{ await db.collection('simulacoes').doc(entry.id).update({valor,rows,params,platformRates,valorBase,editedAt,editCount}); }
           catch(e){ alert('Não foi possível salvar na nuvem. Confira sua conexão e tente novamente.'); return; }
         }
-        Object.assign(entry,{valor,rows,params,platformRates,valorBase});
+        Object.assign(entry,{valor,rows,params,platformRates,valorBase,editedAt,editCount});
+        try{localStorage.setItem('calc-precos:state',JSON.stringify(state));}catch(e){}
         editingEntryId=null;renderHistory();
       });
       container.querySelector(`[data-edit-cancel="${entry.id}"]`).addEventListener('click',()=>{editingEntryId=null;renderHistory();});
@@ -1236,17 +1306,20 @@ function biProducts(id,items,value,callback){
 function renderBI(){
   const brand=document.getElementById('bi-brand').value, platform=document.getElementById('bi-platform').value;
   const days=Number(document.getElementById('bi-period').value)||0;
+  const editedFilter=document.getElementById('bi-edited').value;
   const threshold=days?Date.now()-days*86400000:0;
-  const entries=state.history.filter(e=>(!brand||getEntryBrand(e)===brand)&&(!threshold||new Date(e.savedAt).getTime()>=threshold)&&(!platform||(e.rows||[]).some(r=>r.nome===platform)));
-  const records=entries.flatMap(entry=>(entry.rows||[]).filter(row=>!platform||row.nome===platform).map(row=>({entry,row,brand:getEntryBrand(entry),margin:Number(row.resultadoPct)||0,price:Number(entry.valor)||0,profit:Number(row.sobra)||0})));
+  const entries=state.history.filter(e=>(!brand||getEntryBrand(e)===brand)&&(!threshold||new Date(e.savedAt).getTime()>=threshold)&&(!platform||(e.rows||[]).some(r=>r.nome===platform))&&(!editedFilter||(editedFilter==='sim'?!!e.editedAt:!e.editedAt)));
+  const records=entries.flatMap(entry=>(entry.rows||[]).filter(row=>!platform||row.nome===platform).map(row=>({entry,row,brand:getEntryBrand(entry),margin:Number(row.resultadoPct)||0,price:Number(row.valorAnunciado ?? entry.valor)||0,profit:Number(row.sobra)||0})));
   const unique=new Map();
   [...records].sort((a,b)=>new Date(b.entry.savedAt)-new Date(a.entry.savedAt)).forEach(r=>{const key=r.entry.productId+'|'+r.row.nome;if(!unique.has(key))unique.set(key,r)});
   const latest=[...unique.values()];
   const avg=records.length?records.reduce((n,r)=>n+r.margin,0)/records.length:0;
   const neg=records.filter(r=>r.profit<0).length;
   const total=records.length;
-  const kpis=[['Simulações',entries.length,'Registros do histórico'],['Produtos únicos',new Set(entries.map(e=>String(e.productId))).size,'Códigos distintos'],['Margem média',fmt(avg)+'%','Média simples por plataforma'],['Resultados negativos',neg+' / '+total,'Simulações por plataforma']];
+  const kpis=[['Simulações',entries.length,'Registros do histórico'],['Produtos únicos',new Set(entries.map(e=>String(e.productId))).size,'Códigos distintos'],['Margem média',fmt(avg)+'%','Média simples por plataforma'],['Resultados negativos',neg+' / '+total,'Simulações por plataforma'],['Históricos editados',entries.filter(e=>!!e.editedAt).length,'Registros com alteração']];
   document.getElementById('bi-kpis').innerHTML=kpis.map(k=>`<div class="bi-kpi"><span>${k[0]}</span><strong>${k[1]}</strong><small>${k[2]}</small></div>`).join('');
+  const edits=[...entries].filter(e=>e.editedAt).sort((a,b)=>new Date(b.editedAt)-new Date(a.editedAt)).slice(0,20);
+  biProducts('bi-edits-list',edits.map(e=>({entry:e,row:{nome:'Última edição: '+formatDateTime(e.editedAt)}})),r=>`${Number(r.entry.editCount)||1} edição(ões)`,r=>biHistoryOpen(r.entry.productId,'',''));
   const brands=[['nauber','Nauber'],['fiat','Fiat'],['verkort','Verkort']].map(([key,label])=>({key,label,value:entries.filter(e=>getEntryBrand(e)===key).length}));
   biBars('bi-brand-chart',brands,Math.max(1,...brands.map(x=>x.value)),v=>String(v),r=>{document.getElementById('bi-brand').value=r.key;renderBI()});
   const platforms=[...new Set(records.map(r=>r.row.nome))].map(label=>{const rs=records.filter(r=>r.row.nome===label);return {label,value:rs.reduce((n,r)=>n+r.margin,0)/rs.length}}).sort((a,b)=>b.value-a.value);
@@ -1281,7 +1354,7 @@ document.getElementById('tab-bi').addEventListener('click',()=>{
   // Atualiza os indicadores após o carregamento remoto do histórico.
   if(firebaseReady)loadHistory().then(()=>{if(document.getElementById('tab-bi').classList.contains('active')){biRefreshPlatformOptions();renderBI()}}).catch(()=>{});
 });
-['bi-brand','bi-platform','bi-period','bi-sort'].forEach(id=>document.getElementById(id).addEventListener('change',renderBI));
+['bi-brand','bi-platform','bi-period','bi-sort','bi-edited'].forEach(id=>document.getElementById(id).addEventListener('change',renderBI));
 
 document.getElementById('tab-calc').addEventListener('click', () => {
   document.getElementById('tab-calc').classList.add('active');
@@ -1316,6 +1389,8 @@ document.getElementById('history-search-input').addEventListener('input', render
 document.getElementById('history-filter-marca').addEventListener('change', renderHistory);
 document.getElementById('history-filter-plataforma').addEventListener('change', renderHistory);
 document.getElementById('history-filter-resultado').addEventListener('change', renderHistory);
+['history-filter-editados','history-editado-de','history-editado-ate'].forEach(id=>document.getElementById(id).addEventListener('change',renderHistory));
+document.getElementById('history-edit-clear').addEventListener('click',()=>{['history-editado-de','history-editado-ate','history-filter-editados'].forEach(id=>document.getElementById(id).value='');renderHistory();});
 
 function generatePdfReport(){
   const filtered = getFilteredHistory();
@@ -1331,6 +1406,9 @@ function generatePdfReport(){
   if (filters.query) filterLabels.push(`busca "${filters.query}"`);
   if (filters.marca) filterLabels.push(`marca: ${{fiat:'Fiat',nauber:'Nauber',verkort:'Verkort'}[filters.marca] || filters.marca}`);
   if (filters.plataforma) filterLabels.push(`plataforma: ${filters.plataforma}`);
+  if(filters.editados)filterLabels.push(filters.editados==='sim'?'somente editados':'nunca editados');
+  if(filters.editadoDe)filterLabels.push('editado desde '+filters.editadoDe);
+  if(filters.editadoAte)filterLabels.push('editado até '+filters.editadoAte);
   if (filters.resultado) filterLabels.push(`resultado: ${filters.resultado === 'pos' ? 'positivo' : 'negativo'}`);
   const filterSummary = filterLabels.length ? filterLabels.join(' · ') : 'sem filtros (todas as simulações)';
 
@@ -1354,7 +1432,7 @@ function generatePdfReport(){
     return `
       <div class="pr-entry">
         <h3>${entry.productId} — ${entry.productDesc || '(sem descrição)'}</h3>
-        <div class="pr-sub">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}</div>
+        <div class="pr-sub">${formatDateTime(entry.savedAt)} · valor anunciado R$ ${fmt(entry.valor)}${entry.editedAt ? ` · Editado em ${formatDateTime(entry.editedAt)}` : ''}</div>
         <table>
           <thead><tr>
             <th>Plataforma</th><th>Valor anunciado</th><th>Frete</th><th>Retenção</th><th>Comissão</th><th>Ret. op. crédito</th>
@@ -1389,7 +1467,7 @@ async function loadHistory(){
     const snapshot = await db.collection('simulacoes').orderBy('savedAt', 'desc').get();
     state.history = snapshot.docs.map(doc => {
       const d = doc.data();
-      return { ...d, id: doc.id, savedAt: d.savedAt ? d.savedAt.toDate().toISOString() : new Date().toISOString() };
+      return { ...d, id: doc.id, savedAt: d.savedAt?.toDate ? d.savedAt.toDate().toISOString() : (d.savedAt || new Date().toISOString()), editedAt: d.editedAt?.toDate ? d.editedAt.toDate().toISOString() : (d.editedAt || null) };
     });
   } catch(e){
     container.innerHTML = '<div class="empty" style="color:var(--neg);font-style:normal;">Não consegui carregar o histórico compartilhado. Confira a configuração do Firebase (firebaseConfig) e as regras do Firestore.</div>';
