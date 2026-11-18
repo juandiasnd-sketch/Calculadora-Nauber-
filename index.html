@@ -1477,42 +1477,64 @@ async function loadHistory(){
 }
 
 document.getElementById('save-btn').addEventListener('click', async () => {
-  readParams();
+  const button = document.getElementById('save-btn');
   const status = document.getElementById('save-status');
+  if (button.disabled) return;
+  readParams();
   const product = currentSimProduct();
-  const valor = parseNumberInput(document.getElementById('sim-valor').value) || 0;
-  const hasSimulation = product && valor > 0 && Number.isFinite(custoSimulacao(product)) && state.platforms.some(pl => platformEnabled(product.id, pl.id));
+  const valor = parseNumberInput(document.getElementById('sim-valor').value);
+  const custo = product ? custoSimulacao(product) : NaN;
+  const plataformas = product ? state.platforms.filter(pl => platformEnabled(product.id, pl.id)) : [];
 
-  try{
-    if (hasSimulation){
-      const entry = buildHistoryEntry(product, valor);
-      if (firebaseReady){
-        const docRef = await db.collection('simulacoes').add({
-          productId: entry.productId,
-          productDesc: entry.productDesc,
-          valor: entry.valor,
-          rows: entry.rows,
-          selectedPlatforms: entry.selectedPlatforms,
-          params: entry.params,
-          platformRates: entry.platformRates,
-          valorBase: entry.valorBase,
-          savedAt: firebase.firestore.FieldValue.serverTimestamp(),
-        });
-        entry.id = docRef.id;
-      }
-      state.history.unshift(entry);
+  const erro = !product ? 'Selecione um código de produto cadastrado.'
+    : !Number.isFinite(valor) || valor <= 0 ? 'Informe um valor anunciado maior que zero.'
+    : !Number.isFinite(custo) || custo < 0 ? 'Informe o custo manualmente ou configure o Desconto Classe para calcular o custo.'
+    : !plataformas.length ? 'Selecione pelo menos uma plataforma para salvar.'
+    : null;
+  if (erro) {
+    status.textContent = 'Não foi salvo: ' + erro;
+    status.style.color = 'var(--neg, #b42318)';
+    return;
+  }
+
+  button.disabled = true;
+  status.style.color = '';
+  status.textContent = 'Salvando simulação...';
+  try {
+    const entry = buildHistoryEntry(product, valor);
+    if (!entry.rows.length || entry.rows.some(r => !Number.isFinite(r.valorAnunciado) || r.valorAnunciado <= 0)) {
+      throw new Error('Há um preço anunciado inválido em uma das plataformas. Confira o RES% e os preços individuais.');
     }
-    localStorage.setItem('calc-precos:state', JSON.stringify(state));
-    status.textContent = firebaseReady ? 'Salvo na nuvem ✓' : 'Salvo ✓';
-    setTimeout(() => status.textContent = '', 2500);
-    if (hasSimulation){
-      document.getElementById('sim-id').value = '';
-      document.getElementById('sim-valor').value = '';
+    if (firebaseReady) {
+      const docRef = await db.collection('simulacoes').add({
+        productId: entry.productId,
+        productDesc: entry.productDesc,
+        valor: entry.valor,
+        rows: entry.rows,
+        selectedPlatforms: entry.selectedPlatforms,
+        params: entry.params,
+        platformRates: entry.platformRates,
+        valorBase: entry.valorBase,
+        savedAt: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+      entry.id = docRef.id;
     }
+    state.history.unshift(entry);
+    try { localStorage.setItem('calc-precos:state', JSON.stringify(state)); }
+    catch (storageError) { console.warn('Não foi possível atualizar o armazenamento local:', storageError); }
+    status.textContent = firebaseReady ? 'Simulação salva no histórico e na nuvem ✓' : 'Simulação salva no histórico local ✓';
+    document.getElementById('sim-id').value = '';
+    document.getElementById('sim-valor').value = '';
     renderSimulation();
-    if (document.getElementById('view-historico').style.display !== 'none') loadHistory();
-  } catch(e){
-    status.textContent = 'Erro ao salvar';
+    if (document.getElementById('view-historico').style.display !== 'none') {
+      try { await loadHistory(); } catch (loadError) { console.warn('Erro ao atualizar a lista:', loadError); }
+    }
+  } catch(e) {
+    console.error('Falha ao salvar simulação no histórico:', e);
+    status.style.color = 'var(--neg, #b42318)';
+    status.textContent = 'Não foi salvo: ' + (e?.message || 'verifique a conexão e as permissões do Firebase.');
+  } finally {
+    button.disabled = false;
   }
 });
 
